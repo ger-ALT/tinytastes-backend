@@ -99,6 +99,9 @@ async def generate_baby_recipe(payload: IngestionPayload):
             options={"temperature": 0.0} # Locking down randomness for stable structure
         )
         
+        # Log the raw response for debugging
+        print(f"Raw Response: {response}")
+        
         # Parse the raw response string to ensure it's clean JSON
         raw_output = response['response'].strip()
         recipe_data = json.loads(raw_output)

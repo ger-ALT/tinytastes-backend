@@ -62,12 +62,15 @@ async def generate_baby_recipe(payload: IngestionPayload):
         response = ollama.generate(
             model='tinytastes',
             prompt=user_prompt,
-            options={"temperature": 0.1} # Locking down randomness for stable structure
+            options={"temperature": 0.0} # Locking down randomness for stable structure
         )
         
         # Parse the raw response string to ensure it's clean JSON
         raw_output = response['response'].strip()
         recipe_data = json.loads(raw_output)
+        
+        # Validate the response against the Pydantic schema
+        validated_recipe = RecipeResponseSchema(**recipe_data)
         
         # Log the successful transaction safely to our local SQLite data store
         with sqlite3.connect(DB_NAME) as conn:
@@ -78,7 +81,7 @@ async def generate_baby_recipe(payload: IngestionPayload):
             )
             conn.commit()
             
-        return recipe_data
+        return validated_recipe
 
     except json.JSONDecodeError:
         raise HTTPException(status_code=500, detail="Local model deviated from the mandated JSON output schema.")

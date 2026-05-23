@@ -11,7 +11,7 @@ DB_NAME = "tinytastes_core.db"
 # --- PYDANTIC SCHEMAS ---
 class IngestionPayload(BaseModel):
     baby_age_months: int = Field(..., ge=4, le=36, description="Age of the infant in months")
-    ingredients: List[str] = Field(..., min_items=1, description="List of raw text ingredients available")
+    ingredients: List[str] = Field(..., min_length=1, description="List of raw text ingredients available")
 
 class RecipeResponseSchema(BaseModel):
     recipe_name: str

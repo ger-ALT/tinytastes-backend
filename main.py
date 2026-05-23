@@ -102,8 +102,12 @@ async def generate_baby_recipe(payload: IngestionPayload):
         # Log the raw response for debugging
         print(f"Raw Response: {response}")
         
-        # Parse the raw response string to ensure it's clean JSON
+        # Extract and clean the JSON from the response
         raw_output = response['response'].strip()
+        if raw_output.startswith("```json\n") and raw_output.endswith("\n```"):
+            raw_output = raw_output[9:-3]
+        
+        # Parse the extracted JSON
         recipe_data = json.loads(raw_output)
         
         # Validate the response against the Pydantic schema

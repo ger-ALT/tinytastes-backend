@@ -104,8 +104,9 @@ async def generate_baby_recipe(payload: IngestionPayload):
         
         # Extract and clean the JSON from the response
         raw_output = response['response'].strip()
-        if raw_output.startswith("```json\n") and raw_output.endswith("\n```"):
-            raw_output = raw_output[9:-3]
+        if raw_output.startswith("```json"):
+            raw_output = raw_output.split("```json")[1]
+            raw_output = raw_output.split("```")[0].strip()
         
         # Parse the extracted JSON
         recipe_data = json.loads(raw_output)

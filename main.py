@@ -38,6 +38,13 @@ def init_db():
 
 init_db()
 
+# --- UTILITY FUNCTIONS ---
+def validate_recipe_data(data):
+    try:
+        RecipeResponseSchema(**data)
+    except Exception as e:
+        raise ValueError(f"Invalid recipe data: {str(e)}")
+
 # --- ROUTES ---
 @app.post("/api/v1/recipes/generate", response_model=RecipeResponseSchema)
 async def generate_baby_recipe(payload: IngestionPayload):
@@ -70,7 +77,7 @@ async def generate_baby_recipe(payload: IngestionPayload):
         recipe_data = json.loads(raw_output)
         
         # Validate the response against the Pydantic schema
-        validated_recipe = RecipeResponseSchema(**recipe_data)
+        validate_recipe_data(recipe_data)
         
         # Log the successful transaction safely to our local SQLite data store
         with sqlite3.connect(DB_NAME) as conn:
@@ -81,10 +88,12 @@ async def generate_baby_recipe(payload: IngestionPayload):
             )
             conn.commit()
             
-        return validated_recipe
+        return RecipeResponseSchema(**recipe_data)
 
     except json.JSONDecodeError:
         raise HTTPException(status_code=500, detail="Local model deviated from the mandated JSON output schema.")
+    except ValueError as ve:
+        raise HTTPException(status_code=500, detail=str(ve))
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Inference Engine Error: {str(e)}")
 

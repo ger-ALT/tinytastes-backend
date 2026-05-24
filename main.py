@@ -1,17 +1,19 @@
-import json
 import sqlite3
-from typing import List, Optional
+import json
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
+from typing import List, Optional
 import ollama
 
-app = FastAPI(title="TinyTastes Local Data Engine", version="1.0.0")
-DB_NAME = "tinytastes_core.db"
+app = FastAPI(title="TinyTastes AI Hybrid Backend")
 
-# --- PYDANTIC SCHEMAS ---
-class IngestionPayload(BaseModel):
-    baby_age_months: int = Field(..., ge=4, le=36, description="Age of the infant in months")
-    ingredients: List[str] = Field(..., min_length=1, description="List of raw text ingredients available")
+# --- Pydantic Data Validation Tiers ---
+class RecipeRequest(BaseModel):
+    user_region: str
+    available_ingredients: List[str]
+    baby_age_months: int
+    texture_milestone: str
+    custom_constraints: Optional[str] = None
 
 class RecipeResponseSchema(BaseModel):
     recipe_name: str
@@ -21,57 +23,32 @@ class RecipeResponseSchema(BaseModel):
     texture_modification_notes: str
     regional_substitute_suggestions: List[str]
 
-# --- DATABASE SETUP ---
-def init_db():
-    with sqlite3.connect(DB_NAME) as conn:
-        cursor = conn.cursor()
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS historical_recipes (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                age_months INTEGER,
-                ingredients_input TEXT,
-                recipe_output TEXT,
-                timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
-        conn.commit()
-
-init_db()
-
-# --- UTILITY FUNCTIONS ---
-def validate_recipe_data(data):
-    try:
-        RecipeResponseSchema(**data)
-    except Exception as e:
-        raise ValueError(f"Invalid recipe data: {str(e)}")
-
-def check_choking_hazards(ingredients, baby_age_months):
-    choking_hazards = {
-        "4-6 months": ["grapes", "hot dogs", "raw carrots"],
-        "7-9 months": ["peanuts", "honey", "hard candies"],
-        "10-12 months": ["cherry tomatoes", "raisins", "whole grapes"],
-        "13-18 months": ["nuts", "seeds", "hard candies"],
-        "19-24 months": ["grapes", "hot dogs", "raw carrots"],
-        "25-36 months": ["peanuts", "honey", "hard candies"]
-    }
+# --- Layer 1: Deterministic Datastore Controller ---
+def check_local_database(ingredients: List[str], texture: str) -> Optional[dict]:
+    # Standardized key normalization matching DB records
+    sorted_key = ",".join(sorted([i.lower().strip() for i in ingredients]))
     
-    warning = None
-    for ingredient in ingredients:
-        if baby_age_months <= 6 and ingredient in choking_hazards["4-6 months"]:
-            warning = f"Warning: {ingredient} is a choking hazard for babies under 7 months."
-        elif 7 <= baby_age_months <= 9 and ingredient in choking_hazards["7-9 months"]:
-            warning = f"Warning: {ingredient} is a choking hazard for babies under 10 months."
-        elif 10 <= baby_age_months <= 12 and ingredient in choking_hazards["10-12 months"]:
-            warning = f"Warning: {ingredient} is a choking hazard for babies under 13 months."
-        elif 13 <= baby_age_months <= 18 and ingredient in choking_hazards["13-18 months"]:
-            warning = f"Warning: {ingredient} is a choking hazard for babies under 19 months."
-        elif 19 <= baby_age_months <= 24 and ingredient in choking_hazards["19-24 months"]:
-            warning = f"Warning: {ingredient} is a choking hazard for babies under 25 months."
-        elif 25 <= baby_age_months <= 36 and ingredient in choking_hazards["25-36 months"]:
-            warning = f"Warning: {ingredient} is a choking hazard for babies under 37 months."
+    conn = sqlite3.connect("tinytastes_core.db")
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT recipe_name, preparation_steps FROM recipes WHERE ingredient_key = ? AND target_texture = ?", 
+        (sorted_key, texture.lower())
+    )
+    row = cursor.fetchone()
+    conn.close()
     
-    return warning
+    if row:
+        return {
+            "recipe_name": row[0],
+            "suitability_score": 10,
+            "allergen_flags": [],
+            "preparation_steps": json.loads(row[1]),
+            "texture_modification_notes": "Verified standard pediatric recipe profile.",
+            "regional_substitute_suggestions": []
+        }
+    return None
 
+# --- Layer 2: Affiliate Link Generation ---
 def generate_affiliate_links(selected_ingredients: List[str], expected_recipe_ingredients: List[str], region: str):
     """
     Compares user ingredients against target optimal ingredient configurations.
@@ -86,74 +63,81 @@ def generate_affiliate_links(selected_ingredients: List[str], expected_recipe_in
         })
     return affiliate_payload
 
-# --- ROUTES ---
-@app.post("/api/v1/recipes/generate", response_model=RecipeResponseSchema)
-async def generate_baby_recipe(payload: IngestionPayload):
-    # Construct an explicit prompt passing the data payload and a reminder of the strict format
-    user_prompt = f"""
-    Generate a baby-safe recipe for a child of {payload.baby_age_months} months old.
-    Available raw ingredients: {', '.join(payload.ingredients)}.
-    
-    Output must match this JSON structure:
-    {{
-        "recipe_name": "string",
-        "suitability_score": integer [1-10],
-        "allergen_flags": ["string"],
-        "preparation_steps": ["string"],
-        "texture_modification_notes": "string",
-        "regional_substitute_suggestions": ["string"]
-    }}
-    """
-    
+# --- Layer 2 Fallback: Invoke Local Ollama Structured JSON Infrastructure ---
+@app.post("/api/v1/get-recipe", response_model=RecipeResponseSchema)
+async def process_recipe_engine(request: RecipeRequest):
+    # Try deterministic mapping first (Zero API/Inference Costs)
+    cached_match = check_local_database(request.available_ingredients, request.texture_milestone)
+    if cached_match and not request.custom_constraints:
+        return cached_match
+
+    # Layer 2 Fallback: Invoke Local Ollama Structured JSON Infrastructure
     try:
-        # Request inference from our custom compiled local model
-        response = ollama.generate(
-            model='tinytastes',
-            prompt=user_prompt,
-            options={"temperature": 0.0} # Locking down randomness for stable structure
+        prompt_input = {
+            "ingredients": request.available_ingredients,
+            "age": request.baby_age_months,
+            "milestone": request.texture_milestone,
+            "special_notes": request.custom_constraints
+        }
+
+        # Utilizing Ollama's native structured JSON schema compliance capability
+        response = ollama.chat(
+            model="tinytastes",
+            messages=[{"role": "user", "content": json.dumps(prompt_input)}],
+            format=RecipeResponseSchema.model_json_schema()
         )
         
-        # Log the raw response for debugging
-        print(f"Raw Response: {response}")
-        
-        # Extract and clean the JSON from the response
-        raw_output = response['response'].strip()
-        if raw_output.startswith("```json"):
-            raw_output = raw_output.split("```json")[1]
-            raw_output = raw_output.split("```")[0].strip()
-        
-        # Parse the extracted JSON
-        recipe_data = json.loads(raw_output)
-        
-        # Validate the response against the Pydantic schema
-        validate_recipe_data(recipe_data)
-        
-        # Check for choking hazards
-        choking_hazard_warning = check_choking_hazards(payload.ingredients, payload.baby_age_months)
-        if choking_hazard_warning:
-            recipe_data['allergen_flags'].append(choking_hazard_warning)
-        
-        # Generate affiliate links
-        affiliate_links = generate_affiliate_links(payload.ingredients, recipe_data['regional_substitute_suggestions'], "US-NE")
-        recipe_data['regional_substitute_suggestions'] = affiliate_links
-        
-        # Log the successful transaction safely to our local SQLite data store
-        with sqlite3.connect(DB_NAME) as conn:
-            cursor = conn.cursor()
-            cursor.execute(
-                "INSERT INTO historical_recipes (age_months, ingredients_input, recipe_output) VALUES (?, ?, ?)",
-                (payload.baby_age_months, json.dumps(payload.ingredients), raw_output)
-            )
-            conn.commit()
-            
-        return RecipeResponseSchema(**recipe_data)
+        structured_data = json.loads(response['message']['content'])
+        return structured_data
 
-    except json.JSONDecodeError as e:
-        raise HTTPException(status_code=500, detail=f"JSON Decode Error: {str(e)}")
-    except ValueError as ve:
-        raise HTTPException(status_code=500, detail=str(ve))
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Inference Engine Error: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"AI Engine Extraction Failure: {str(e)}")
+
+# --- PDF Cookbook Export Endpoint (Microtransaction Hook) ---
+@app.post("/api/v1/export-pdf")
+async def export_pdf(request: RecipeRequest):
+    """
+    Bundles successful recipe records into a sequential dataset for document processing.
+    """
+    document_data = {
+        "document_header": "My Baby's First Foods Daily Journal",
+        "meta": { 
+            "compiled_for_months": request.baby_age_months, 
+            "regional_profile": request.user_region 
+        },
+        "rendered_content_blocks": [
+            {
+                "type": "recipe_card",
+                "title": "Generated Custom AI Recipe",
+                "body": "Detailed compilation of safe textures, preparation intervals, and nutrition insights."
+            }
+        ]
+    }
+    return document_data
+
+# --- Health Check Endpoint ---
+@app.get("/health")
+async def health_check():
+    return {"status": "healthy", "service": "TinyTastes AI"}
+
+# --- Database Initialization ---
+def init_db():
+    with sqlite3.connect("tinytastes_core.db") as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS recipes (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ingredient_key TEXT,
+                target_texture TEXT,
+                recipe_name TEXT,
+                preparation_steps TEXT,
+                timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        conn.commit()
+
+# Initialize database on startup
+init_db()
 
 if __name__ == "__main__":
     import uvicorn

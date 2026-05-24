@@ -15,11 +15,11 @@ class IngestionPayload(BaseModel):
 
 class RecipeResponseSchema(BaseModel):
     recipe_name: str
-    preparation_time_mins: int
-    texture_profile: str  # e.g., "Smooth Puree", "Soft Mash", "Finger Food Finger-Length Strips"
-    choking_hazard_warning: Optional[str] = None
-    step_by_step_instructions: List[str]
-    nutritional_benefit_focus: str
+    suitability_score: int
+    allergen_flags: List[str]
+    preparation_steps: List[str]
+    texture_modification_notes: str
+    regional_substitute_suggestions: List[str]
 
 # --- DATABASE SETUP ---
 def init_db():
@@ -72,6 +72,20 @@ def check_choking_hazards(ingredients, baby_age_months):
     
     return warning
 
+def generate_affiliate_links(selected_ingredients: List[str], expected_recipe_ingredients: List[str], region: str):
+    """
+    Compares user ingredients against target optimal ingredient configurations.
+    Returns targeted affiliate cart links mapping directly to regional APIs (e.g., Instacart).
+    """
+    missing_items = list(set(expected_recipe_ingredients) - set(selected_ingredients))
+    affiliate_payload = []
+    for item in missing_items:
+        affiliate_payload.append({
+            "item": item,
+            "action_url": f"https://partner-grocery-api.com/v1/checkout?item={item}&region={region}&affiliate_id=tinytastes"
+        })
+    return affiliate_payload
+
 # --- ROUTES ---
 @app.post("/api/v1/recipes/generate", response_model=RecipeResponseSchema)
 async def generate_baby_recipe(payload: IngestionPayload):
@@ -83,11 +97,11 @@ async def generate_baby_recipe(payload: IngestionPayload):
     Output must match this JSON structure:
     {{
         "recipe_name": "string",
-        "preparation_time_mins": integer,
-        "texture_profile": "string",
-        "choking_hazard_warning": "string or null",
-        "step_by_step_instructions": ["string"],
-        "nutritional_benefit_focus": "string"
+        "suitability_score": integer [1-10],
+        "allergen_flags": ["string"],
+        "preparation_steps": ["string"],
+        "texture_modification_notes": "string",
+        "regional_substitute_suggestions": ["string"]
     }}
     """
     
@@ -117,7 +131,11 @@ async def generate_baby_recipe(payload: IngestionPayload):
         # Check for choking hazards
         choking_hazard_warning = check_choking_hazards(payload.ingredients, payload.baby_age_months)
         if choking_hazard_warning:
-            recipe_data['choking_hazard_warning'] = choking_hazard_warning
+            recipe_data['allergen_flags'].append(choking_hazard_warning)
+        
+        # Generate affiliate links
+        affiliate_links = generate_affiliate_links(payload.ingredients, recipe_data['regional_substitute_suggestions'], "US-NE")
+        recipe_data['regional_substitute_suggestions'] = affiliate_links
         
         # Log the successful transaction safely to our local SQLite data store
         with sqlite3.connect(DB_NAME) as conn:

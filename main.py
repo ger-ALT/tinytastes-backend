@@ -175,14 +175,16 @@ def init_db() -> None:
         cursor = conn.cursor()
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS recipes (
-                id               INTEGER PRIMARY KEY AUTOINCREMENT,
-                ingredient_key   TEXT    NOT NULL,
-                target_texture   TEXT    NOT NULL,
-                recipe_name      TEXT    NOT NULL,
-                preparation_steps TEXT   NOT NULL,
-                full_ingredients  TEXT   NOT NULL,
-                allergen_flags    TEXT   NOT NULL DEFAULT '[]',
-                timestamp        DATETIME DEFAULT CURRENT_TIMESTAMP
+                id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+                ingredient_key       TEXT    NOT NULL,
+                target_texture       TEXT    NOT NULL,
+                recipe_name          TEXT    NOT NULL,
+                preparation_steps    TEXT    NOT NULL,
+                full_ingredients     TEXT    NOT NULL,
+                allergen_flags       TEXT    NOT NULL DEFAULT '[]',
+                serving_size         TEXT    NOT NULL DEFAULT '',
+                storage_instructions TEXT    NOT NULL DEFAULT '',
+                timestamp            DATETIME DEFAULT CURRENT_TIMESTAMP
             )
         """)
         cursor.execute("""
@@ -194,8 +196,23 @@ def init_db() -> None:
                 timestamp         DATETIME DEFAULT CURRENT_TIMESTAMP
             )
         """)
+        # Schema migration: add new columns to existing deployments
+        for col, default in [("serving_size", "''"), ("storage_instructions", "''")] :
+            try:
+                cursor.execute(f"ALTER TABLE recipes ADD COLUMN {col} TEXT NOT NULL DEFAULT {default}")
+            except Exception:
+                pass  # column already exists — skip
         conn.commit()
         _seed_recipes(cursor, conn)
+
+
+# Storage / serving constants reused in seed data
+_STORE_PUREE   = "Refrigerate up to 2 days. Freeze in ice cube trays up to 1 month."
+_STORE_CHUNKY  = "Refrigerate up to 2 days. Freeze in portions up to 1 month."
+_STORE_FINGER  = "Best served fresh. Refrigerate up to 1 day."
+_SERVE_PUREE   = "1-2 tablespoons per meal (increase gradually)"
+_SERVE_CHUNKY  = "3-4 tablespoons per meal"
+_SERVE_FINGER  = "3-4 pieces per meal, let baby self-feed"
 
 
 def _seed_recipes(cursor: sqlite3.Cursor, conn: sqlite3.Connection) -> None:
@@ -203,93 +220,158 @@ def _seed_recipes(cursor: sqlite3.Cursor, conn: sqlite3.Connection) -> None:
     if cursor.fetchone()[0] > 0:
         return
 
+    # Tuple: (ingredient_key, texture, name, steps_json, ingredients_json, allergens_json, serving_size, storage_instructions)
     seed = [
-        # ── Purees ──────────────────────────────────────────────────────────
+        # ── Purees (4-7m) ────────────────────────────────────────────────────
         ("apple,sweet potato", "puree", "Apple Sweet Potato Puree",
          '["Peel and dice 1 apple and 1 sweet potato.", "Steam for 10–12 minutes until very soft.", "Blend with 2–3 tbsp water until completely smooth.", "Cool to room temperature before serving."]',
-         '["apple", "sweet potato"]', '[]'),
+         '["apple", "sweet potato"]', '[]', _SERVE_PUREE, _STORE_PUREE),
 
         ("banana,avocado", "puree", "Banana Avocado Mash",
-         '["Mash half a ripe banana with a fork.", "Mash a quarter of a ripe avocado.", "Combine and mix until smooth.", "Serve immediately — do not store."]',
-         '["banana", "avocado"]', '[]'),
+         '["Mash half a ripe banana with a fork.", "Mash a quarter of a ripe avocado.", "Combine and mix until smooth.", "Serve immediately."]',
+         '["banana", "avocado"]', '[]', _SERVE_PUREE, "Best served fresh — do not store."),
 
         ("carrot,pea", "puree", "Carrot Pea Puree",
          '["Steam 2 medium carrots and ¼ cup peas for 8 minutes.", "Blend together with a splash of water.", "Pass through a fine sieve for extra smoothness.", "Cool before serving."]',
-         '["carrot", "pea"]', '[]'),
-
-        ("butternut squash", "puree", "Butternut Squash Puree",
-         '["Halve squash and remove seeds.", "Roast cut-side down at 375°F for 45 minutes.", "Scoop flesh and blend until silky.", "Thin with breast milk or formula if needed."]',
-         '["butternut squash"]', '[]'),
+         '["carrot", "pea"]', '[]', _SERVE_PUREE, _STORE_PUREE),
 
         ("broccoli,potato", "puree", "Broccoli Potato Puree",
          '["Dice 1 medium potato and steam with broccoli florets for 10 minutes.", "Blend with 3 tbsp water until smooth.", "Check temperature before serving."]',
-         '["broccoli", "potato"]', '[]'),
+         '["broccoli", "potato"]', '[]', _SERVE_PUREE, _STORE_PUREE),
 
         ("mango,banana", "puree", "Mango Banana Puree",
          '["Peel and chop a ripe mango.", "Blend with half a banana until completely smooth.", "No cooking required for ripe fruit.", "Refrigerate up to 24 hours."]',
-         '["mango", "banana"]', '[]'),
+         '["mango", "banana"]', '[]', _SERVE_PUREE, "Refrigerate up to 24 hours."),
 
         ("pear,spinach", "puree", "Pear Spinach Puree",
          '["Core and cube 1 ripe pear.", "Steam with a handful of spinach for 5 minutes.", "Blend until very smooth.", "Strain through a sieve if needed."]',
-         '["pear", "spinach"]', '[]'),
+         '["pear", "spinach"]', '[]', _SERVE_PUREE, _STORE_PUREE),
 
-        # ── Chunky ──────────────────────────────────────────────────────────
-        ("carrot,chicken,potato", "chunky", "Chicken & Vegetable Stew",
-         '["Dice chicken breast into small pieces.", "Chop carrot and potato into pea-sized cubes.", "Simmer all ingredients in low-sodium broth for 20 minutes.", "Mash lightly — leave soft lumps.", "Cool and serve."]',
-         '["chicken", "carrot", "potato"]', '[]'),
+        ("carrot,sweet potato", "puree", "Carrot Sweet Potato Puree",
+         '["Peel and dice 1 medium carrot and 1 small sweet potato.", "Steam together for 12 minutes until very soft.", "Blend with 3-4 tbsp water to a smooth puree.", "Cool before serving."]',
+         '["carrot", "sweet potato"]', '[]', _SERVE_PUREE, _STORE_PUREE),
 
-        ("carrot,lentil,tomato", "chunky", "Red Lentil & Vegetable Dhal",
-         '["Rinse ¼ cup red lentils.", "Simmer with diced carrot and tomato in 1 cup water for 15 minutes.", "Mash to chunky consistency.", "A pinch of mild cumin is fine for babies over 8 months.", "Cool before serving."]',
-         '["lentil", "tomato", "carrot"]', '[]'),
+        ("potato,carrot", "puree", "Potato Carrot Mash",
+         '["Peel and dice 1 potato and 1 carrot.", "Boil in water for 12 minutes until very tender.", "Drain and mash until completely smooth.", "Thin with a little boiled water if needed."]',
+         '["potato", "carrot"]', '[]', _SERVE_PUREE, _STORE_PUREE),
+
+        ("moong dal,rice", "puree", "Moong Dal Rice Puree",
+         '["Rinse 2 tbsp moong dal and 2 tbsp rice together.", "Cook in 1 cup water on low heat for 15 minutes until very soft.", "Blend to a smooth puree with extra water if needed.", "Add a tiny drop of ghee before serving."]',
+         '["moong dal", "rice", "ghee"]', '[]', _SERVE_PUREE, _STORE_PUREE),
+
+        ("banana,ragi", "puree", "Ragi Banana Porridge",
+         '["Mix 2 tbsp ragi flour with ½ cup water to form a lump-free slurry.", "Cook on low heat stirring constantly for 4-5 minutes until thick.", "Mash in half a ripe banana and stir well.", "Cool to warm temperature before serving."]',
+         '["ragi", "banana"]', '[]', _SERVE_PUREE, "Refrigerate up to 1 day. Best served fresh."),
+
+        ("apple,carrot", "puree", "Apple Carrot Puree",
+         '["Peel and dice 1 apple and 1 carrot.", "Steam together for 10 minutes until soft.", "Blend with 2 tbsp water until silky smooth.", "Strain for younger babies under 6 months."]',
+         '["apple", "carrot"]', '[]', _SERVE_PUREE, _STORE_PUREE),
+
+        ("papaya", "puree", "Papaya Puree",
+         '["Peel ripe papaya and remove seeds.", "Cut into small cubes.", "Blend until completely smooth — no cooking needed.", "Strain through a sieve for younger babies."]',
+         '["papaya"]', '[]', _SERVE_PUREE, "Refrigerate up to 1 day."),
+
+        ("sweet potato", "puree", "Sweet Potato Puree",
+         '["Peel and dice 1 medium sweet potato.", "Steam for 12-15 minutes until very soft.", "Blend with 3-4 tbsp water until silky smooth.", "Cool before serving."]',
+         '["sweet potato"]', '[]', _SERVE_PUREE, _STORE_PUREE),
+
+        ("pumpkin,carrot", "puree", "Pumpkin Carrot Puree",
+         '["Peel and dice equal parts pumpkin and carrot.", "Steam for 10 minutes until very soft.", "Blend with a splash of water until smooth.", "Cool and serve."]',
+         '["pumpkin", "carrot"]', '[]', _SERVE_PUREE, _STORE_PUREE),
+
+        # ── Chunky (8-10m) ───────────────────────────────────────────────────
+        ("carrot,chicken,potato", "chunky", "Chicken Vegetable Stew",
+         '["Dice chicken breast into very small pieces.", "Chop carrot and potato into pea-sized cubes.", "Simmer all in 1 cup water for 20 minutes until very soft.", "Mash lightly — leave soft lumps for texture.", "Cool before serving."]',
+         '["chicken", "carrot", "potato"]', '[]', _SERVE_CHUNKY, _STORE_CHUNKY),
+
+        ("carrot,lentil,tomato", "chunky", "Red Lentil Vegetable Dal",
+         '["Rinse ¼ cup red lentils.", "Simmer with diced carrot and tomato in 1 cup water for 15 minutes.", "Mash to chunky consistency.", "A pinch of mild cumin is fine for babies over 8 months."]',
+         '["masoor dal", "tomato", "carrot"]', '[]', _SERVE_CHUNKY, _STORE_CHUNKY),
 
         ("avocado,egg", "chunky", "Avocado Egg Scramble",
-         '["Whisk one large egg.", "Scramble over low heat until just set — small soft curds.", "Mash in a quarter of a ripe avocado.", "Break into small pieces and cool slightly.", "Serve warm."]',
-         '["avocado", "egg"]', '["egg"]'),
+         '["Whisk one large egg.", "Scramble over low heat until just set — small soft curds.", "Mash in a quarter of a ripe avocado.", "Break into small pieces, cool slightly, and serve warm."]',
+         '["avocado", "egg"]', '["egg"]', _SERVE_CHUNKY, "Best served fresh."),
 
         ("banana,oat", "chunky", "Banana Oat Porridge",
-         '["Cook ¼ cup oats in ½ cup water for 3–4 minutes.", "Mash in half a ripe banana.", "Leave slightly lumpy to encourage chewing practice.", "Cool to a warm serving temperature."]',
-         '["banana", "oat"]', '["gluten"]'),
+         '["Cook ¼ cup oats in ½ cup water for 3–4 minutes.", "Mash in half a ripe banana.", "Leave slightly lumpy to encourage chewing practice.", "Cool to warm temperature."]',
+         '["oats", "banana"]', '["gluten"]', _SERVE_CHUNKY, "Refrigerate up to 1 day. Best served fresh."),
 
         ("black bean,sweet potato", "chunky", "Sweet Potato Black Bean Mash",
-         '["Bake or microwave sweet potato until very tender.", "Mash with a fork, leaving some texture.", "Stir in 2 tbsp rinsed black beans.", "Serve warm."]',
-         '["sweet potato", "black bean"]', '[]'),
+         '["Bake or microwave sweet potato until very tender.", "Mash with a fork, leaving some texture.", "Stir in 2 tbsp rinsed and mashed black beans.", "Serve warm."]',
+         '["sweet potato", "black bean"]', '[]', _SERVE_CHUNKY, _STORE_CHUNKY),
 
-        ("pasta,pea", "chunky", "Pea & Pasta Mini",
-         '["Cook star-shaped pasta or orzo until very soft.", "Stir in cooked peas.", "Lightly mash with a fork to break some peas.", "Serve at room temperature."]',
-         '["pea", "pasta"]', '["gluten"]'),
+        ("ghee,moong dal,rice", "chunky", "Classic Khichdi",
+         '["Rinse 3 tbsp rice and 2 tbsp moong dal together.", "Cook in 1.5 cups water with a pinch of turmeric for 20 minutes until very soft.", "Mash to a soft, slightly chunky texture.", "Stir in half a teaspoon of ghee before serving."]',
+         '["rice", "moong dal", "ghee"]', '[]', _SERVE_CHUNKY, _STORE_CHUNKY),
 
-        # ── Finger Foods ─────────────────────────────────────────────────────
+        ("carrot,dalia (broken wheat)", "chunky", "Dalia Vegetable Khichdi",
+         '["Dry roast 3 tbsp dalia (broken wheat) for 2 minutes until fragrant.", "Add diced carrot and 1 cup water, cook covered for 15 minutes.", "Mash lightly with a spoon.", "Add a few drops of ghee and serve warm."]',
+         '["dalia (broken wheat)", "carrot", "ghee"]', '["gluten"]', _SERVE_CHUNKY, _STORE_CHUNKY),
+
+        ("carrot,pea,semolina (suji)", "chunky", "Soft Vegetable Upma",
+         '["Dry roast 3 tbsp semolina for 2 minutes.", "Add diced carrot and peas with 1 cup water.", "Cook on low heat stirring for 5 minutes until soft.", "Leave slightly grainy — good texture practice."]',
+         '["semolina (suji)", "carrot", "pea"]', '["gluten"]', _SERVE_CHUNKY, "Refrigerate up to 1 day."),
+
+        ("banana,curd / yoghurt", "chunky", "Banana Curd Bowl",
+         '["Mash half a ripe banana with a fork.", "Mix with 2 tbsp plain full-fat curd.", "Leave slightly lumpy — no cooking required.", "Serve immediately at room temperature."]',
+         '["banana", "curd"]', '["dairy"]', _SERVE_CHUNKY, "Serve immediately."),
+
+        ("potato,spinach", "chunky", "Palak Aloo Mash",
+         '["Boil 1 potato until very soft, peel and mash.", "Blanch a handful of spinach in hot water for 2 minutes, then puree.", "Mix mashed potato with spinach puree.", "Leave slightly chunky, add a drop of ghee."]',
+         '["potato", "spinach", "ghee"]', '[]', _SERVE_CHUNKY, _STORE_CHUNKY),
+
+        ("apple,oat", "chunky", "Apple Oat Porridge",
+         '["Peel and grate 1 small apple.", "Cook ¼ cup oats in ½ cup water for 3 minutes.", "Stir in grated apple and cook 1 more minute.", "Leave slightly lumpy — cool before serving."]',
+         '["oats", "apple"]', '["gluten"]', _SERVE_CHUNKY, "Refrigerate up to 1 day."),
+
+        # ── Finger Foods (10m+) ──────────────────────────────────────────────
         ("banana", "finger_food", "Banana Fingers",
          '["Peel a firm-ripe banana.", "Cut into 3-inch finger-length strips.", "The natural stickiness helps baby grip safely.", "Serve as-is — no preparation needed."]',
-         '["banana"]', '[]'),
+         '["banana"]', '[]', _SERVE_FINGER, "Serve immediately."),
 
         ("blueberry,ricotta", "finger_food", "Blueberry Ricotta Bites",
          '["Halve fresh blueberries lengthwise to remove choking risk.", "Mix with 2 tbsp ricotta.", "Form into small bite-sized mounds.", "Chill briefly to firm up, then serve."]',
-         '["blueberry", "ricotta"]', '["dairy"]'),
+         '["blueberry", "ricotta"]', '["dairy"]', _SERVE_FINGER, _STORE_FINGER),
 
         ("egg,spinach", "finger_food", "Spinach Egg Mini Frittata",
-         '["Whisk 2 eggs with a handful of finely chopped spinach.", "Pour into a greased mini muffin tin.", "Bake at 350°F for 12 minutes until set.", "Cool, then cut into finger-sized strips.", "Refrigerate leftovers up to 2 days."]',
-         '["egg", "spinach"]', '["egg"]'),
+         '["Whisk 2 eggs with a handful of finely chopped spinach.", "Pour into a greased mini muffin tin.", "Bake at 180°C for 12 minutes until set.", "Cool, then cut into finger-sized strips."]',
+         '["egg", "spinach"]', '["egg"]', _SERVE_FINGER, "Refrigerate up to 2 days."),
 
         ("chickpea,sweet potato", "finger_food", "Sweet Potato Chickpea Patties",
-         '["Mash ½ cup cooked sweet potato with ¼ cup chickpeas.", "Form into small flat patties.", "Pan-fry in a drop of olive oil for 3 minutes each side.", "Cool — patties should squish easily between fingers."]',
-         '["sweet potato", "chickpea"]', '[]'),
+         '["Mash ½ cup cooked sweet potato with ¼ cup chickpeas.", "Form into small flat patties.", "Pan-fry in a drop of oil for 3 minutes each side until golden.", "Cool — patties should squish easily between fingers."]',
+         '["sweet potato", "chickpea"]', '[]', _SERVE_FINGER, "Refrigerate up to 2 days."),
 
         ("apple,cinnamon", "finger_food", "Soft Cinnamon Apple Wedges",
          '["Peel and slice apple into thin wedges.", "Steam for 5–6 minutes until very soft but holding shape.", "Dust lightly with a pinch of cinnamon.", "Cool to room temperature before serving."]',
-         '["apple", "cinnamon"]', '[]'),
+         '["apple", "cinnamon"]', '[]', _SERVE_FINGER, _STORE_FINGER),
 
         ("cheese,zucchini", "finger_food", "Cheesy Zucchini Sticks",
-         '["Cut zucchini into 2-inch sticks.", "Roast at 400°F for 15 minutes until soft and slightly golden.", "Sprinkle with grated mild cheese in the last 2 minutes.", "Cool and serve as soft finger food."]',
-         '["zucchini", "cheese"]', '["dairy"]'),
+         '["Cut zucchini into 2-inch sticks.", "Roast at 200°C for 15 minutes until soft and slightly golden.", "Sprinkle with grated mild cheese in the last 2 minutes.", "Cool and serve as soft finger food."]',
+         '["zucchini", "cheese"]', '["dairy"]', _SERVE_FINGER, _STORE_FINGER),
 
         ("banana,blueberry,oat", "finger_food", "Baby Oat Pancakes",
          '["Mash 1 ripe banana, mix with ¼ cup oats and 1 egg.", "Fold in a few halved blueberries.", "Drop small spoonfuls onto a non-stick pan over low heat.", "Cook 2 minutes each side.", "Slice into finger strips when cool."]',
-         '["oat", "banana", "blueberry", "egg"]', '["egg", "gluten"]'),
+         '["oats", "banana", "blueberry", "egg"]', '["egg", "gluten"]', _SERVE_FINGER, "Refrigerate up to 1 day."),
+
+        ("paneer", "finger_food", "Soft Paneer Cubes",
+         '["Cut fresh paneer into small 1cm cubes.", "Lightly pan-fry in ½ tsp ghee for 1 minute each side until just golden.", "Cool completely before serving.", "Ensure cubes are soft enough to squish between fingers."]',
+         '["paneer", "ghee"]', '["dairy"]', _SERVE_FINGER, "Refrigerate up to 1 day."),
+
+        ("sweet potato", "finger_food", "Baked Sweet Potato Fingers",
+         '["Peel sweet potato and cut into thick finger-shaped sticks.", "Toss lightly in ½ tsp ghee.", "Bake at 200°C for 20 minutes until soft inside and slightly crisp outside.", "Cool completely — they should squish easily between fingers."]',
+         '["sweet potato", "ghee"]', '[]', _SERVE_FINGER, "Refrigerate up to 2 days."),
+
+        ("banana,ragi", "finger_food", "Ragi Banana Mini Pancakes",
+         '["Mix 3 tbsp ragi flour with 1 mashed banana and 2 tbsp water to form a thick batter.", "Drop small rounds onto a non-stick pan over low heat.", "Cook 2-3 minutes each side until cooked through.", "Cool and serve as soft finger food."]',
+         '["ragi", "banana"]', '[]', _SERVE_FINGER, "Refrigerate up to 1 day."),
+
+        ("egg,banana", "finger_food", "Banana Egg Bites",
+         '["Mash 1 ripe banana with 2 eggs until smooth.", "Pour into a greased mini muffin tin.", "Bake at 180°C for 10-12 minutes until set.", "Cool completely before serving."]',
+         '["banana", "egg"]', '["egg"]', _SERVE_FINGER, "Refrigerate up to 2 days."),
     ]
 
     cursor.executemany(
-        "INSERT INTO recipes (ingredient_key, target_texture, recipe_name, preparation_steps, full_ingredients, allergen_flags) VALUES (?,?,?,?,?,?)",
+        "INSERT INTO recipes (ingredient_key, target_texture, recipe_name, preparation_steps, full_ingredients, allergen_flags, serving_size, storage_instructions) VALUES (?,?,?,?,?,?,?,?)",
         seed,
     )
     conn.commit()
@@ -406,7 +488,7 @@ def check_local_database(ingredients: List[str], texture: str) -> Optional[dict]
         cursor = conn.cursor()
         # Exact match first
         cursor.execute(
-            "SELECT recipe_name, preparation_steps, full_ingredients, allergen_flags "
+            "SELECT recipe_name, preparation_steps, full_ingredients, allergen_flags, serving_size, storage_instructions "
             "FROM recipes WHERE ingredient_key = ? AND target_texture = ?",
             (sorted_key, texture.lower()),
         )
@@ -416,7 +498,7 @@ def check_local_database(ingredients: List[str], texture: str) -> Optional[dict]
 
         # Subset match: find best cached recipe whose ingredients the user has
         cursor.execute(
-            "SELECT recipe_name, preparation_steps, full_ingredients, allergen_flags, ingredient_key "
+            "SELECT recipe_name, preparation_steps, full_ingredients, allergen_flags, ingredient_key, serving_size, storage_instructions "
             "FROM recipes WHERE target_texture = ?",
             (texture.lower(),),
         )
@@ -426,7 +508,8 @@ def check_local_database(ingredients: List[str], texture: str) -> Optional[dict]
             if cached_set.issubset(user_set) and len(cached_set) > best_overlap:
                 best_row, best_overlap = r, len(cached_set)
         if best_row:
-            return _build_cache_result(best_row[:4])
+            # Re-order: name, steps, ingredients, allergens, serving_size, storage_instructions
+            return _build_cache_result((best_row[0], best_row[1], best_row[2], best_row[3], best_row[5], best_row[6]))
 
     return None
 
@@ -436,10 +519,10 @@ def _build_cache_result(row) -> dict:
         "suitability_score": 10,
         "allergen_flags": json.loads(row[3]),
         "preparation_steps": json.loads(row[1]),
-        "texture_modification_notes": "Verified standard pediatric recipe profile.",
+        "texture_modification_notes": "Verified standard pediatric recipe.",
         "regional_substitute_suggestions": [],
-        "serving_size": "",
-        "storage_instructions": "",
+        "serving_size": row[4] if len(row) > 4 else "",
+        "storage_instructions": row[5] if len(row) > 5 else "",
         "_full_ingredients": json.loads(row[2]),
     }
 
@@ -499,10 +582,10 @@ async def _get_recipe(request: RecipeRequest) -> RecipeResponseSchema:
                 ).fetchone()
                 if not existing:
                     conn.execute(
-                        "INSERT INTO recipes (ingredient_key, target_texture, recipe_name, preparation_steps, full_ingredients, allergen_flags) VALUES (?,?,?,?,?,?)",
+                        "INSERT INTO recipes (ingredient_key, target_texture, recipe_name, preparation_steps, full_ingredients, allergen_flags, serving_size, storage_instructions) VALUES (?,?,?,?,?,?,?,?)",
                         (sorted_key, request.texture_milestone, ai.recipe_name,
                          json.dumps(ai.preparation_steps), json.dumps(ai.ingredients_required),
-                         json.dumps(ai.allergen_flags))
+                         json.dumps(ai.allergen_flags), ai.serving_size, ai.storage_instructions)
                     )
         except Exception:
             pass  # auto-cache is non-critical

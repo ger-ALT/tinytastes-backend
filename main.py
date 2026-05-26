@@ -2,6 +2,7 @@ import sqlite3
 import json
 import os
 import tempfile
+import urllib.parse
 import urllib.request
 from contextlib import asynccontextmanager
 from typing import List, Optional
@@ -15,12 +16,13 @@ from openai import OpenAI
 # ---------------------------------------------------------------------------
 # Config
 # ---------------------------------------------------------------------------
-DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY", "")
-DEEPSEEK_MODEL   = os.getenv("DEEPSEEK_MODEL", "deepseek-chat")
-DB_PATH          = os.getenv("DB_PATH", "tinytastes_core.db")
-AI_PROVIDER      = os.getenv("AI_PROVIDER", "deepseek")   # "deepseek" | "ollama"
-OLLAMA_MODEL     = os.getenv("OLLAMA_MODEL", "qwen3.5:latest")
-OLLAMA_URL       = os.getenv("OLLAMA_URL", "http://localhost:11434")
+DEEPSEEK_API_KEY    = os.getenv("DEEPSEEK_API_KEY", "")
+DEEPSEEK_MODEL      = os.getenv("DEEPSEEK_MODEL", "deepseek-chat")
+DB_PATH             = os.getenv("DB_PATH", "tinytastes_core.db")
+AI_PROVIDER         = os.getenv("AI_PROVIDER", "deepseek")   # "deepseek" | "ollama"
+OLLAMA_MODEL        = os.getenv("OLLAMA_MODEL", "qwen3.5:latest")
+OLLAMA_URL          = os.getenv("OLLAMA_URL", "http://localhost:11434")
+AMAZON_AFFILIATE_TAG = os.getenv("AMAZON_AFFILIATE_TAG", "tinytastes-21")  # set in Railway
 
 SYSTEM_PROMPT = """You are a Pediatric Nutritionist AI for TinyTastes.
 Generate safe, age-appropriate baby food recipes. Respond with valid JSON only — no prose, no markdown fences.
@@ -294,9 +296,9 @@ def _seed_recipes(cursor: sqlite3.Cursor, conn: sqlite3.Connection) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Affiliate links
+# Affiliate links — Amazon Associates India
 # ---------------------------------------------------------------------------
-# Items always assumed to be at home — never generate affiliate links for these
+# Items always at home — never link
 PANTRY_STAPLES = {
     "water", "salt", "black salt", "rock salt", "pink salt",
     "oil", "cooking oil", "vegetable oil", "sunflower oil",
@@ -305,7 +307,8 @@ PANTRY_STAPLES = {
     "black pepper", "pepper",
 }
 
-# Specialty / expensive items — always show a link even if user said they have it
+# Specialty / expensive items — always link even if user has them
+# (worth buying premium / organic versions)
 SPECIALTY_ITEMS = {
     "ragi", "ragi flour", "jowar", "bajra", "sattu",
     "paneer", "tofu",
@@ -317,8 +320,42 @@ SPECIALTY_ITEMS = {
     "quinoa",
     "chia seeds", "flax seeds",
     "almond flour", "coconut flour",
-    "formula", "breast milk",
 }
+
+# Curated Amazon search queries — more specific = better product results
+AMAZON_SEARCH_OVERRIDES: dict = {
+    "ghee":          "desi ghee pure cow organic",
+    "a2 ghee":       "a2 cow ghee organic",
+    "desi ghee":     "desi ghee pure cow organic",
+    "ragi":          "ragi flour organic baby cereal",
+    "ragi flour":    "ragi flour organic baby food",
+    "jowar":         "jowar flour sorghum organic",
+    "bajra":         "bajra flour pearl millet organic",
+    "sattu":         "sattu powder roasted chana",
+    "paneer":        "fresh paneer cottage cheese",
+    "avocado":       "fresh avocado ripe",
+    "blueberry":     "fresh blueberries",
+    "blueberries":   "fresh blueberries",
+    "ricotta":       "ricotta cheese",
+    "cream cheese":  "cream cheese plain",
+    "saffron":       "pure saffron kesar",
+    "quinoa":        "organic quinoa seeds",
+    "chia seeds":    "organic chia seeds",
+    "flax seeds":    "organic flax seeds alsi",
+    "tofu":          "firm tofu organic",
+    "almond flour":  "almond flour blanched",
+    "coconut flour": "coconut flour organic",
+    "oats":          "rolled oats baby porridge",
+    "dalia":         "dalia broken wheat organic",
+    "semolina":      "fine semolina suji rava",
+    "suji":          "fine semolina suji baby",
+}
+
+def _amazon_url(item: str) -> str:
+    """Generate an Amazon.in affiliate search URL for a grocery item."""
+    query = AMAZON_SEARCH_OVERRIDES.get(item.lower().strip(), f"{item} for babies")
+    encoded = urllib.parse.quote_plus(query)
+    return f"https://www.amazon.in/s?k={encoded}&tag={AMAZON_AFFILIATE_TAG}"
 
 def generate_affiliate_links(available: List[str], required: List[str], region: str) -> List[AffiliateLink]:
     available_set = {i.lower().strip() for i in available}
@@ -328,12 +365,9 @@ def generate_affiliate_links(available: List[str], required: List[str], region: 
         key = item.lower().strip()
         if key in seen or key in PANTRY_STAPLES:
             continue
-        # Show link if: user doesn't have it OR it's a specialty item worth buying premium
+        # Link if: user doesn't have it OR it's a specialty item worth buying premium quality
         if key not in available_set or key in SPECIALTY_ITEMS:
-            links.append(AffiliateLink(
-                item=item,
-                action_url=f"https://partner-grocery-api.com/v1/checkout?item={item}&region={region}&affiliate_id=tinytastes",
-            ))
+            links.append(AffiliateLink(item=item, action_url=_amazon_url(item)))
             seen.add(key)
     return links
 

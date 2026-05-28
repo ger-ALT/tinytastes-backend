@@ -13,6 +13,16 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, field_validator
 from openai import OpenAI
 
+# Error monitoring — only activates when SENTRY_DSN env var is set
+import sentry_sdk
+_SENTRY_DSN = os.getenv("SENTRY_DSN", "")
+if _SENTRY_DSN:
+    sentry_sdk.init(
+        dsn=_SENTRY_DSN,
+        traces_sample_rate=0.1,
+        environment=os.getenv("RAILWAY_ENVIRONMENT", "production"),
+    )
+
 # ---------------------------------------------------------------------------
 # Config
 # ---------------------------------------------------------------------------
@@ -762,10 +772,12 @@ async def export_pdf(request: RecipeRequest):
 @app.get("/health")
 async def health_check():
     db_ok = False
+    recipe_count = 0
     try:
         with sqlite3.connect(DB_PATH) as conn:
             conn.execute("SELECT 1")
-        db_ok = True
+            db_ok = True
+            recipe_count = conn.execute("SELECT COUNT(*) FROM recipes").fetchone()[0]
     except Exception:
         pass
 
@@ -773,55 +785,11 @@ async def health_check():
         "status": "healthy",
         "service": "TinyTastes AI",
         "db": "ok" if db_ok else "error",
+        "cached_recipes": recipe_count,
         "ai_provider": "DeepSeek",
         "model": DEEPSEEK_MODEL,
         "api_key_set": bool(DEEPSEEK_API_KEY),
     }
-
-
-# ---------------------------------------------------------------------------
-# ONE-TIME ADMIN: pre-seed the recipe cache
-# DELETE this endpoint after running once on Railway.
-# Usage: POST /admin/seed?secret=tinytastes-seed-2026
-# ---------------------------------------------------------------------------
-import subprocess, threading
-
-_seed_lock = threading.Lock()
-_seed_status = {"running": False, "done": False, "error": ""}
-
-def _run_seed():
-    global _seed_status
-    try:
-        result = subprocess.run(
-            ["python", "pre_seed.py"],
-            capture_output=True, text=True, timeout=600
-        )
-        _seed_status["error"] = result.stderr[-500:] if result.returncode != 0 else ""
-    except Exception as e:
-        _seed_status["error"] = str(e)
-    finally:
-        _seed_status["running"] = False
-        _seed_status["done"] = True
-
-@app.post("/admin/seed")
-async def admin_seed(secret: str = ""):
-    if secret != "tinytastes-seed-2026":
-        raise HTTPException(status_code=403, detail="Forbidden")
-    with _seed_lock:
-        if _seed_status["running"]:
-            return {"status": "already running — check Railway logs"}
-        if _seed_status["done"]:
-            return {"status": "already completed this session", "error": _seed_status["error"]}
-        _seed_status["running"] = True
-        _seed_status["done"] = False
-    threading.Thread(target=_run_seed, daemon=True).start()
-    return {"status": "seeding started — watch Railway deployment logs for progress (~3-5 min)"}
-
-@app.get("/admin/seed")
-async def seed_status(secret: str = ""):
-    if secret != "tinytastes-seed-2026":
-        raise HTTPException(status_code=403, detail="Forbidden")
-    return _seed_status
 
 
 if __name__ == "__main__":

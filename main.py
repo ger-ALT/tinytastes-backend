@@ -7,7 +7,7 @@ import urllib.request
 from contextlib import asynccontextmanager
 from typing import List, Optional
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, field_validator
@@ -917,7 +917,7 @@ async def verify_payment(req: RazorpayVerifyRequest):
 
 
 @app.post("/api/v1/razorpay/webhook")
-async def razorpay_webhook(request: "Request"):
+async def razorpay_webhook(request: Request):
     """Handle Razorpay subscription webhooks (payment.captured, subscription.charged)."""
     import razorpay as _rp, hmac as _hmac, hashlib
     body = await request.body()

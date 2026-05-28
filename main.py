@@ -840,26 +840,35 @@ async def send_push_notification(req: SendPushRequest):
 # Razorpay subscription routes
 # ---------------------------------------------------------------------------
 def _supabase_set_premium(user_id: str, subscription_id: str) -> bool:
-    """Update user_profiles in Supabase using the service role key."""
+    """Upsert is_premium=true in Supabase using the service role key.
+
+    Uses POST + Prefer:resolution=merge-duplicates (upsert) rather than PATCH
+    so the row is created if it doesn't exist yet, not silently skipped.
+    """
     if not SUPABASE_URL or not SUPABASE_SERVICE_ROLE_KEY:
+        print("Supabase premium update skipped: SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY not set")
         return False
+    from datetime import datetime, timezone
     payload = json.dumps({
-        "is_premium": True,
+        "id":                       user_id,
+        "is_premium":               True,
         "razorpay_subscription_id": subscription_id,
+        "premium_since":            datetime.now(timezone.utc).isoformat(),
     }).encode()
     req = urllib.request.Request(
-        f"{SUPABASE_URL}/rest/v1/user_profiles?id=eq.{user_id}",
+        f"{SUPABASE_URL}/rest/v1/user_profiles",
         data=payload,
         headers={
-            "Content-Type": "application/json",
+            "Content-Type":  "application/json",
             "Authorization": f"Bearer {SUPABASE_SERVICE_ROLE_KEY}",
-            "apikey": SUPABASE_SERVICE_ROLE_KEY,
-            "Prefer": "return=minimal",
+            "apikey":        SUPABASE_SERVICE_ROLE_KEY,
+            "Prefer":        "resolution=merge-duplicates,return=minimal",
         },
-        method="PATCH",
+        method="POST",
     )
     try:
         urllib.request.urlopen(req, timeout=10)
+        print(f"Supabase premium activated for user {user_id}")
         return True
     except Exception as e:
         print(f"Supabase premium update failed: {e}")

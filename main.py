@@ -39,6 +39,15 @@ VAPID_PRIVATE_KEY   = os.getenv("VAPID_PRIVATE_KEY", "")
 VAPID_PUBLIC_KEY    = os.getenv("VAPID_PUBLIC_KEY", "")
 VAPID_CLAIMS        = {"sub": "mailto:hello@tinytastes.in"}
 
+# Razorpay (subscriptions / premium)
+RAZORPAY_KEY_ID     = os.getenv("RAZORPAY_KEY_ID", "")
+RAZORPAY_KEY_SECRET = os.getenv("RAZORPAY_KEY_SECRET", "")
+RAZORPAY_PLAN_ID    = os.getenv("RAZORPAY_PLAN_ID", "")   # create in Razorpay dashboard
+
+# Supabase service role (for updating user_profiles from webhooks)
+SUPABASE_URL              = os.getenv("NEXT_PUBLIC_SUPABASE_URL", os.getenv("SUPABASE_URL", ""))
+SUPABASE_SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "")
+
 SYSTEM_PROMPT = """You are a Pediatric Nutritionist AI for TinyTastes.
 Generate safe, age-appropriate baby food recipes. Respond with valid JSON only — no prose, no markdown fences.
 
@@ -825,6 +834,109 @@ async def send_push_notification(req: SendPushRequest):
         if "410" in err_str or "404" in err_str:
             raise HTTPException(status_code=410, detail="Subscription expired — client must re-subscribe")
         raise HTTPException(status_code=500, detail=f"Push send failed: {err_str}")
+
+
+# ---------------------------------------------------------------------------
+# Razorpay subscription routes
+# ---------------------------------------------------------------------------
+def _supabase_set_premium(user_id: str, subscription_id: str) -> bool:
+    """Update user_profiles in Supabase using the service role key."""
+    if not SUPABASE_URL or not SUPABASE_SERVICE_ROLE_KEY:
+        return False
+    payload = json.dumps({
+        "is_premium": True,
+        "razorpay_subscription_id": subscription_id,
+    }).encode()
+    req = urllib.request.Request(
+        f"{SUPABASE_URL}/rest/v1/user_profiles?id=eq.{user_id}",
+        data=payload,
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {SUPABASE_SERVICE_ROLE_KEY}",
+            "apikey": SUPABASE_SERVICE_ROLE_KEY,
+            "Prefer": "return=minimal",
+        },
+        method="PATCH",
+    )
+    try:
+        urllib.request.urlopen(req, timeout=10)
+        return True
+    except Exception as e:
+        print(f"Supabase premium update failed: {e}")
+        return False
+
+
+class RazorpayVerifyRequest(BaseModel):
+    razorpay_payment_id: str
+    razorpay_subscription_id: str
+    razorpay_signature: str
+    user_id: str
+
+
+@app.post("/api/v1/razorpay/create-subscription")
+async def create_subscription():
+    """Create a Razorpay subscription for the premium plan."""
+    if not RAZORPAY_KEY_ID or not RAZORPAY_PLAN_ID:
+        raise HTTPException(status_code=503, detail="Payments not configured")
+    try:
+        import razorpay
+        client = razorpay.Client(auth=(RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET))
+        sub = client.subscription.create({
+            "plan_id":     RAZORPAY_PLAN_ID,
+            "total_count": 120,   # 10 years — effectively ongoing
+            "quantity":    1,
+        })
+        return {"subscription_id": sub["id"]}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/v1/razorpay/verify")
+async def verify_payment(req: RazorpayVerifyRequest):
+    """Verify Razorpay payment signature and activate premium."""
+    if not RAZORPAY_KEY_SECRET:
+        raise HTTPException(status_code=503, detail="Payments not configured")
+    try:
+        import razorpay, hmac as _hmac, hashlib
+        # Razorpay signature verification
+        msg = f"{req.razorpay_payment_id}|{req.razorpay_subscription_id}"
+        expected = _hmac.new(
+            RAZORPAY_KEY_SECRET.encode(),
+            msg.encode(),
+            hashlib.sha256,
+        ).hexdigest()
+        if expected != req.razorpay_signature:
+            raise HTTPException(status_code=400, detail="Invalid payment signature")
+        # Activate premium in Supabase
+        _supabase_set_premium(req.user_id, req.razorpay_subscription_id)
+        return {"premium": True}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/v1/razorpay/webhook")
+async def razorpay_webhook(request: "Request"):
+    """Handle Razorpay subscription webhooks (payment.captured, subscription.charged)."""
+    import razorpay as _rp, hmac as _hmac, hashlib
+    body = await request.body()
+    sig  = request.headers.get("X-Razorpay-Signature", "")
+    expected = _hmac.new(
+        RAZORPAY_KEY_SECRET.encode(), body, hashlib.sha256
+    ).hexdigest()
+    if expected != sig:
+        raise HTTPException(status_code=400, detail="Invalid webhook signature")
+
+    event = json.loads(body)
+    if event.get("event") in ("payment.captured", "subscription.charged"):
+        payload = event.get("payload", {})
+        sub     = payload.get("subscription", {}).get("entity", {})
+        sub_id  = sub.get("id", "")
+        # Note: user_id lookup from sub_id requires storing it at creation time.
+        # For now, rely on the /verify endpoint called immediately from frontend.
+        print(f"Webhook: {event.get('event')} — subscription {sub_id}")
+    return {"ok": True}
 
 
 @app.get("/health")

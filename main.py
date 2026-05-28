@@ -916,6 +916,64 @@ async def verify_payment(req: RazorpayVerifyRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# ── Standard Checkout (order-based) ──────────────────────────────────────────
+
+class RazorpayOrderVerifyRequest(BaseModel):
+    razorpay_payment_id: str
+    razorpay_order_id: str
+    razorpay_signature: str
+    user_id: str
+
+
+@app.post("/api/v1/razorpay/create-order")
+async def create_order():
+    """Create a Razorpay order for Standard Checkout (₹99 = 9900 paise)."""
+    if not RAZORPAY_KEY_ID or not RAZORPAY_KEY_SECRET:
+        raise HTTPException(status_code=503, detail="Payments not configured")
+    try:
+        import razorpay
+        client = razorpay.Client(auth=(RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET))
+        order = client.order.create({
+            "amount":   9900,    # ₹99 in paise
+            "currency": "INR",
+            "receipt":  "tinytastes_premium_99",
+        })
+        return {
+            "order_id": order["id"],
+            "amount":   order["amount"],
+            "currency": order["currency"],
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/v1/razorpay/verify-payment")
+async def verify_order_payment(req: RazorpayOrderVerifyRequest):
+    """Verify Standard Checkout HMAC and activate premium in Supabase."""
+    if not RAZORPAY_KEY_SECRET:
+        raise HTTPException(status_code=503, detail="Payments not configured")
+    if not req.razorpay_payment_id or not req.razorpay_order_id or not req.razorpay_signature:
+        raise HTTPException(status_code=400, detail="Missing required fields")
+    try:
+        import hmac as _hmac, hashlib
+        # Standard Checkout signature: HMAC-SHA256(order_id|payment_id, secret)
+        msg = f"{req.razorpay_order_id}|{req.razorpay_payment_id}"
+        expected = _hmac.new(
+            RAZORPAY_KEY_SECRET.encode(),
+            msg.encode(),
+            hashlib.sha256,
+        ).hexdigest()
+        if expected != req.razorpay_signature:
+            raise HTTPException(status_code=400, detail="Invalid payment signature")
+        # Activate premium in Supabase (store order_id as reference ID)
+        _supabase_set_premium(req.user_id, req.razorpay_order_id)
+        return {"premium": True}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.post("/api/v1/razorpay/webhook")
 async def razorpay_webhook(request: Request):
     """Handle Razorpay subscription webhooks (payment.captured, subscription.charged)."""

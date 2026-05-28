@@ -34,6 +34,11 @@ OLLAMA_MODEL        = os.getenv("OLLAMA_MODEL", "qwen3.5:latest")
 OLLAMA_URL          = os.getenv("OLLAMA_URL", "http://localhost:11434")
 AMAZON_AFFILIATE_TAG = os.getenv("AMAZON_AFFILIATE_TAG", "tinytastes-21")  # set in Railway
 
+# Web Push (VAPID) — generate keys once: python -c "from py_vapid import Vapid; v=Vapid(); v.generate_keys(); print(v.private_key_pem, v.public_key_str)"
+VAPID_PRIVATE_KEY   = os.getenv("VAPID_PRIVATE_KEY", "")
+VAPID_PUBLIC_KEY    = os.getenv("VAPID_PUBLIC_KEY", "")
+VAPID_CLAIMS        = {"sub": "mailto:hello@tinytastes.in"}
+
 SYSTEM_PROMPT = """You are a Pediatric Nutritionist AI for TinyTastes.
 Generate safe, age-appropriate baby food recipes. Respond with valid JSON only — no prose, no markdown fences.
 
@@ -767,6 +772,59 @@ async def export_pdf(request: RecipeRequest):
     doc.build(story)
     safe_name = recipe.recipe_name.lower().replace(" ", "_")[:40]
     return FileResponse(tmp.name, media_type="application/pdf", filename=f"tinytastes_{safe_name}.pdf")
+
+
+# ---------------------------------------------------------------------------
+# Push notification routes
+# ---------------------------------------------------------------------------
+class PushSubscriptionKeys(BaseModel):
+    p256dh: str
+    auth: str
+
+class PushSubscription(BaseModel):
+    endpoint: str
+    keys: PushSubscriptionKeys
+
+class SendPushRequest(BaseModel):
+    subscription: PushSubscription
+    title: str = "TinyTastes 🍱"
+    body: str = "Today's recipe is ready — tap to see what's perfect for your baby!"
+    url: str = "/recipe"
+
+
+@app.get("/api/v1/push/vapid-key")
+async def get_vapid_key():
+    """Return the VAPID public key so the frontend can subscribe."""
+    if not VAPID_PUBLIC_KEY:
+        raise HTTPException(status_code=503, detail="Push notifications not configured — set VAPID_PUBLIC_KEY env var")
+    return {"public_key": VAPID_PUBLIC_KEY}
+
+
+@app.post("/api/v1/push/send")
+async def send_push_notification(req: SendPushRequest):
+    """Send a Web Push notification to a specific subscription endpoint."""
+    if not VAPID_PRIVATE_KEY or not VAPID_PUBLIC_KEY:
+        raise HTTPException(status_code=503, detail="Push not configured — VAPID keys missing")
+    try:
+        from pywebpush import webpush, WebPushException
+        payload = json.dumps({"title": req.title, "body": req.body, "url": req.url})
+        webpush(
+            subscription_info={
+                "endpoint": req.subscription.endpoint,
+                "keys": {"p256dh": req.subscription.keys.p256dh, "auth": req.subscription.keys.auth},
+            },
+            data=payload,
+            vapid_private_key=VAPID_PRIVATE_KEY,
+            vapid_claims=VAPID_CLAIMS,
+            ttl=86400,  # 24 hours
+        )
+        return {"sent": True}
+    except Exception as e:
+        err_str = str(e)
+        # Subscription expired / unregistered — client should re-subscribe
+        if "410" in err_str or "404" in err_str:
+            raise HTTPException(status_code=410, detail="Subscription expired — client must re-subscribe")
+        raise HTTPException(status_code=500, detail=f"Push send failed: {err_str}")
 
 
 @app.get("/health")

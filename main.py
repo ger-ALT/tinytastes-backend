@@ -406,31 +406,72 @@ SPECIALTY_ITEMS = {
 
 # Curated Amazon search queries — more specific = better product results
 AMAZON_SEARCH_OVERRIDES: dict = {
-    "ghee":          "desi ghee pure cow organic",
-    "a2 ghee":       "a2 cow ghee organic",
-    "desi ghee":     "desi ghee pure cow organic",
-    "ragi":          "ragi flour organic baby cereal",
-    "ragi flour":    "ragi flour organic baby food",
-    "jowar":         "jowar flour sorghum organic",
-    "bajra":         "bajra flour pearl millet organic",
-    "sattu":         "sattu powder roasted chana",
-    "paneer":        "fresh paneer cottage cheese",
-    "avocado":       "fresh avocado ripe",
-    "blueberry":     "fresh blueberries",
-    "blueberries":   "fresh blueberries",
-    "ricotta":       "ricotta cheese",
-    "cream cheese":  "cream cheese plain",
-    "saffron":       "pure saffron kesar",
-    "quinoa":        "organic quinoa seeds",
-    "chia seeds":    "organic chia seeds",
-    "flax seeds":    "organic flax seeds alsi",
-    "tofu":          "firm tofu organic",
-    "almond flour":  "almond flour blanched",
-    "coconut flour": "coconut flour organic",
-    "oats":          "rolled oats baby porridge",
-    "dalia":         "dalia broken wheat organic",
-    "semolina":      "fine semolina suji rava",
-    "suji":          "fine semolina suji baby",
+    # ── Grains ──────────────────────────────────────────────────────────
+    "ragi":                    "ragi flour organic baby cereal",
+    "ragi flour":              "ragi flour organic baby food",
+    "oats":                    "rolled oats baby porridge",
+    "jowar":                   "jowar flour sorghum organic",
+    "bajra":                   "bajra flour pearl millet organic",
+    "sattu":                   "sattu powder roasted chana",
+    "semolina (suji)":         "fine semolina suji rava baby",
+    "semolina":                "fine semolina suji rava",
+    "suji":                    "fine semolina suji baby",
+    "dalia (broken wheat)":    "dalia broken wheat organic porridge",
+    "dalia":                   "dalia broken wheat organic",
+    "wheat":                   "whole wheat flour atta organic",
+    "amaranth (rajgira)":      "rajgira amaranth flour organic",
+    "amaranth":                "rajgira amaranth flour",
+    "sabudana (tapioca)":      "sabudana tapioca pearls medium",
+    "sabudana":                "sabudana tapioca pearls",
+    "buckwheat (kuttu)":       "kuttu buckwheat flour organic",
+    "buckwheat":               "buckwheat flour kuttu",
+    # ── Dairy & Fats ────────────────────────────────────────────────────
+    "ghee":                    "desi ghee pure cow organic",
+    "a2 ghee":                 "a2 cow ghee organic",
+    "desi ghee":               "desi ghee pure cow organic",
+    "paneer":                  "fresh paneer cottage cheese",
+    "ricotta":                 "ricotta cheese",
+    "cream cheese":            "cream cheese plain",
+    "coconut milk":            "coconut milk organic unsweetened",
+    # ── Fruits ──────────────────────────────────────────────────────────
+    "avocado":                 "fresh avocado ripe",
+    "blueberry":               "fresh blueberries",
+    "blueberries":             "fresh blueberries",
+    "dates":                   "soft dates seedless medjool",
+    "guava":                   "guava fresh",
+    "peach":                   "peach fresh",
+    "chikoo (sapota)":         "chikoo sapota fresh",
+    "custard apple (sitaphal)":"sitaphal custard apple fresh",
+    "nendran banana":          "nendran banana kerala raw",
+    # ── Protein ─────────────────────────────────────────────────────────
+    "tofu":                    "firm tofu organic",
+    "chickpea":                "chickpea kabuli chana organic",
+    "rajma (kidney beans)":    "rajma red kidney beans organic",
+    "rajma":                   "rajma red kidney beans",
+    "chana dal":               "chana dal split bengal gram organic",
+    "urad dal":                "urad dal white split organic",
+    "masoor dal":              "masoor dal red lentils organic",
+    "toor dal":                "toor dal arhar dal organic",
+    "moong dal":               "moong dal yellow split organic",
+    "fish":                    "rohu fish fresh frozen baby",
+    # ── Nuts & Seeds ────────────────────────────────────────────────────
+    "peanut butter":           "peanut butter unsalted natural no sugar baby",
+    "almond butter":           "almond butter unsalted natural",
+    "cashew":                  "cashew nuts whole raw organic",
+    "sesame (til)":            "white sesame seeds til organic",
+    "flaxseed (alsi)":         "flaxseed alsi powder organic",
+    "flax seeds":              "organic flax seeds alsi",
+    "pumpkin seeds":           "pumpkin seeds roasted unsalted",
+    # ── Spices ──────────────────────────────────────────────────────────
+    "fennel (saunf)":          "saunf fennel seeds organic baby",
+    "coriander (dhania)":      "coriander powder dhania organic",
+    "cloves (laung)":          "laung cloves whole organic",
+    # ── Legacy / misc ───────────────────────────────────────────────────
+    "saffron":                 "pure saffron kesar",
+    "quinoa":                  "organic quinoa seeds",
+    "chia seeds":              "organic chia seeds",
+    "almond flour":            "almond flour blanched",
+    "coconut flour":           "coconut flour organic",
 }
 
 def _amazon_url(item: str) -> str:
@@ -736,6 +777,51 @@ async def health_check():
         "model": DEEPSEEK_MODEL,
         "api_key_set": bool(DEEPSEEK_API_KEY),
     }
+
+
+# ---------------------------------------------------------------------------
+# ONE-TIME ADMIN: pre-seed the recipe cache
+# DELETE this endpoint after running once on Railway.
+# Usage: POST /admin/seed?secret=tinytastes-seed-2026
+# ---------------------------------------------------------------------------
+import subprocess, threading
+
+_seed_lock = threading.Lock()
+_seed_status = {"running": False, "done": False, "error": ""}
+
+def _run_seed():
+    global _seed_status
+    try:
+        result = subprocess.run(
+            ["python", "pre_seed.py"],
+            capture_output=True, text=True, timeout=600
+        )
+        _seed_status["error"] = result.stderr[-500:] if result.returncode != 0 else ""
+    except Exception as e:
+        _seed_status["error"] = str(e)
+    finally:
+        _seed_status["running"] = False
+        _seed_status["done"] = True
+
+@app.post("/admin/seed")
+async def admin_seed(secret: str = ""):
+    if secret != "tinytastes-seed-2026":
+        raise HTTPException(status_code=403, detail="Forbidden")
+    with _seed_lock:
+        if _seed_status["running"]:
+            return {"status": "already running — check Railway logs"}
+        if _seed_status["done"]:
+            return {"status": "already completed this session", "error": _seed_status["error"]}
+        _seed_status["running"] = True
+        _seed_status["done"] = False
+    threading.Thread(target=_run_seed, daemon=True).start()
+    return {"status": "seeding started — watch Railway deployment logs for progress (~3-5 min)"}
+
+@app.get("/admin/seed")
+async def seed_status(secret: str = ""):
+    if secret != "tinytastes-seed-2026":
+        raise HTTPException(status_code=403, detail="Forbidden")
+    return _seed_status
 
 
 if __name__ == "__main__":

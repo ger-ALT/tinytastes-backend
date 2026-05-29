@@ -852,11 +852,12 @@ async def send_push_notification(req: SendPushRequest):
 # Razorpay subscription routes
 # ---------------------------------------------------------------------------
 def _supabase_set_premium(user_id: str, subscription_id: str) -> bool:
-    """PATCH is_premium=true on the existing user_profiles row.
+    """Upsert is_premium=true into user_profiles.
 
-    getUserProfile() always creates the row before payment happens, so PATCH
-    is safe. We also send premium_until to satisfy any table constraints or
-    triggers that require it when is_premium is true.
+    Uses POST + Prefer: resolution=merge-duplicates (Supabase upsert) instead
+    of PATCH. PATCH silently returns 204 with 0 rows updated when the row
+    doesn't exist yet — upsert creates it in that case.
+    return=representation logs exactly what Supabase wrote so we can verify.
     """
     _url  = (SUPABASE_URL or "").strip().rstrip("/")
     _key  = (SUPABASE_SERVICE_ROLE_KEY or "").strip()
@@ -864,12 +865,18 @@ def _supabase_set_premium(user_id: str, subscription_id: str) -> bool:
         print("Supabase premium update skipped: SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY not set")
         return False
 
-    # Set premium_until to 10 years from now (handles any NOT NULL / check constraints)
     import datetime
-    premium_until = (datetime.datetime.utcnow() + datetime.timedelta(days=3650)).strftime("%Y-%m-%dT%H:%M:%S+00:00")
-    payload = json.dumps({"is_premium": True, "premium_until": premium_until}).encode()
-    url = f"{_url}/rest/v1/user_profiles?id=eq.{urllib.parse.quote(user_id)}"
-    print(f"Supabase PATCH → {url}")
+    premium_until = (
+        datetime.datetime.utcnow() + datetime.timedelta(days=3650)
+    ).strftime("%Y-%m-%dT%H:%M:%S+00:00")
+
+    payload = json.dumps({
+        "id":            user_id,
+        "is_premium":    True,
+        "premium_until": premium_until,
+    }).encode()
+    url = f"{_url}/rest/v1/user_profiles"
+    print(f"Supabase upsert → {url} for user {user_id}")
     req = urllib.request.Request(
         url,
         data=payload,
@@ -877,13 +884,15 @@ def _supabase_set_premium(user_id: str, subscription_id: str) -> bool:
             "Content-Type":  "application/json",
             "Authorization": f"Bearer {_key}",
             "apikey":        _key,
-            "Prefer":        "return=minimal",
+            # merge-duplicates = update on PK conflict; representation = log what was written
+            "Prefer":        "resolution=merge-duplicates,return=representation",
         },
-        method="PATCH",
+        method="POST",
     )
     try:
         with urllib.request.urlopen(req, timeout=10) as resp:
-            print(f"Supabase premium activated for user {user_id} — HTTP {resp.status}")
+            body = resp.read().decode("utf-8", errors="replace")
+            print(f"Supabase premium upserted for user {user_id} — HTTP {resp.status}: {body[:300]}")
         return True
     except urllib.error.HTTPError as e:
         body = e.read().decode("utf-8", errors="replace")

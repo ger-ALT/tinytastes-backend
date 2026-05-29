@@ -45,7 +45,8 @@ RAZORPAY_KEY_SECRET = os.getenv("RAZORPAY_KEY_SECRET", "")
 RAZORPAY_PLAN_ID    = os.getenv("RAZORPAY_PLAN_ID", "")   # create in Razorpay dashboard
 
 # Supabase service role (for updating user_profiles from webhooks)
-SUPABASE_URL              = os.getenv("NEXT_PUBLIC_SUPABASE_URL", os.getenv("SUPABASE_URL", ""))
+# Use plain SUPABASE_URL in Railway — NEXT_PUBLIC_SUPABASE_URL is Vercel-only
+SUPABASE_URL              = os.getenv("SUPABASE_URL", "")
 SUPABASE_SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "")
 
 SYSTEM_PROMPT = """You are a Pediatric Nutritionist AI for TinyTastes.
@@ -218,6 +219,16 @@ def init_db() -> None:
                 ingredients_input TEXT,
                 recipe_output     TEXT,
                 timestamp         DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        # Maps Razorpay order_id → user_id so the webhook can activate premium
+        # even if the browser closed before the verify-payment call returned.
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS orders (
+                order_id   TEXT PRIMARY KEY,
+                user_id    TEXT NOT NULL,
+                activated  INTEGER NOT NULL DEFAULT 0,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
             )
         """)
         # Schema migration: add new columns to existing deployments
@@ -927,6 +938,10 @@ async def verify_payment(req: RazorpayVerifyRequest):
 
 # ── Standard Checkout (order-based) ──────────────────────────────────────────
 
+class RazorpayCreateOrderRequest(BaseModel):
+    user_id: str
+
+
 class RazorpayOrderVerifyRequest(BaseModel):
     razorpay_payment_id: str
     razorpay_order_id: str
@@ -934,8 +949,33 @@ class RazorpayOrderVerifyRequest(BaseModel):
     user_id: str
 
 
+def _store_order(order_id: str, user_id: str) -> None:
+    """Persist order_id → user_id so the webhook can activate premium as a backup."""
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.execute(
+            "INSERT OR IGNORE INTO orders (order_id, user_id) VALUES (?, ?)",
+            (order_id, user_id),
+        )
+        conn.commit()
+
+
+def _mark_order_activated(order_id: str) -> None:
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.execute("UPDATE orders SET activated=1 WHERE order_id=?", (order_id,))
+        conn.commit()
+
+
+def _get_order_user(order_id: str) -> Optional[str]:
+    with sqlite3.connect(DB_PATH) as conn:
+        row = conn.execute(
+            "SELECT user_id FROM orders WHERE order_id=? AND activated=0",
+            (order_id,),
+        ).fetchone()
+    return row[0] if row else None
+
+
 @app.post("/api/v1/razorpay/create-order")
-async def create_order():
+async def create_order(req: RazorpayCreateOrderRequest):
     """Create a Razorpay order for Standard Checkout (₹99 = 9900 paise)."""
     if not RAZORPAY_KEY_ID or not RAZORPAY_KEY_SECRET:
         raise HTTPException(status_code=503, detail="Payments not configured")
@@ -945,8 +985,10 @@ async def create_order():
         order = client.order.create({
             "amount":   9900,    # ₹99 in paise
             "currency": "INR",
-            "receipt":  "tinytastes_premium_99",
+            "receipt":  f"tt_premium_{req.user_id[:8]}",
         })
+        # Store mapping so the webhook can find user_id from order_id
+        _store_order(order["id"], req.user_id)
         return {
             "order_id": order["id"],
             "amount":   order["amount"],
@@ -974,8 +1016,8 @@ async def verify_order_payment(req: RazorpayOrderVerifyRequest):
         ).hexdigest()
         if expected != req.razorpay_signature:
             raise HTTPException(status_code=400, detail="Invalid payment signature")
-        # Activate premium in Supabase (store order_id as reference ID)
         _supabase_set_premium(req.user_id, req.razorpay_order_id)
+        _mark_order_activated(req.razorpay_order_id)
         return {"premium": True}
     except HTTPException:
         raise
@@ -985,8 +1027,8 @@ async def verify_order_payment(req: RazorpayOrderVerifyRequest):
 
 @app.post("/api/v1/razorpay/webhook")
 async def razorpay_webhook(request: Request):
-    """Handle Razorpay subscription webhooks (payment.captured, subscription.charged)."""
-    import razorpay as _rp, hmac as _hmac, hashlib
+    """Handle Razorpay webhooks — activates premium if verify-payment was missed."""
+    import hmac as _hmac, hashlib
     body = await request.body()
     sig  = request.headers.get("X-Razorpay-Signature", "")
     expected = _hmac.new(
@@ -996,12 +1038,15 @@ async def razorpay_webhook(request: Request):
         raise HTTPException(status_code=400, detail="Invalid webhook signature")
 
     event = json.loads(body)
-    if event.get("event") in ("payment.captured", "subscription.charged"):
-        payload = event.get("payload", {})
-        sub     = payload.get("subscription", {}).get("entity", {})
-        sub_id  = sub.get("id", "")
-        # Note: user_id lookup from sub_id requires storing it at creation time.
-        # For now, rely on the /verify endpoint called immediately from frontend.
+    if event.get("event") == "payment.captured":
+        payment  = event.get("payload", {}).get("payment", {}).get("entity", {})
+        order_id = payment.get("order_id", "")
+        if order_id:
+            user_id = _get_order_user(order_id)   # None if already activated
+            if user_id:
+                print(f"Webhook activating premium for user {user_id} via order {order_id}")
+                _supabase_set_premium(user_id, order_id)
+                _mark_order_activated(order_id)
         print(f"Webhook: {event.get('event')} — subscription {sub_id}")
     return {"ok": True}
 

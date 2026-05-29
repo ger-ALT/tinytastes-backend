@@ -855,28 +855,35 @@ def _supabase_set_premium(user_id: str, subscription_id: str) -> bool:
     """PATCH is_premium=true on the existing user_profiles row.
 
     getUserProfile() always creates the row before payment happens, so PATCH
-    is safe and avoids upsert complexity (upsert INSERT needs every NOT NULL
-    column which varies per project).
+    is safe. We also send premium_until to satisfy any table constraints or
+    triggers that require it when is_premium is true.
     """
-    if not SUPABASE_URL or not SUPABASE_SERVICE_ROLE_KEY:
+    _url  = (SUPABASE_URL or "").strip().rstrip("/")
+    _key  = (SUPABASE_SERVICE_ROLE_KEY or "").strip()
+    if not _url or not _key:
         print("Supabase premium update skipped: SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY not set")
         return False
-    payload = json.dumps({"is_premium": True}).encode()
-    url = f"{SUPABASE_URL}/rest/v1/user_profiles?id=eq.{urllib.parse.quote(user_id)}"
+
+    # Set premium_until to 10 years from now (handles any NOT NULL / check constraints)
+    import datetime
+    premium_until = (datetime.datetime.utcnow() + datetime.timedelta(days=3650)).strftime("%Y-%m-%dT%H:%M:%S+00:00")
+    payload = json.dumps({"is_premium": True, "premium_until": premium_until}).encode()
+    url = f"{_url}/rest/v1/user_profiles?id=eq.{urllib.parse.quote(user_id)}"
+    print(f"Supabase PATCH → {url}")
     req = urllib.request.Request(
         url,
         data=payload,
         headers={
             "Content-Type":  "application/json",
-            "Authorization": f"Bearer {SUPABASE_SERVICE_ROLE_KEY}",
-            "apikey":        SUPABASE_SERVICE_ROLE_KEY,
+            "Authorization": f"Bearer {_key}",
+            "apikey":        _key,
             "Prefer":        "return=minimal",
         },
         method="PATCH",
     )
     try:
-        urllib.request.urlopen(req, timeout=10)
-        print(f"Supabase premium activated for user {user_id}")
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            print(f"Supabase premium activated for user {user_id} — HTTP {resp.status}")
         return True
     except urllib.error.HTTPError as e:
         body = e.read().decode("utf-8", errors="replace")
@@ -1048,7 +1055,7 @@ async def razorpay_webhook(request: Request):
                 print(f"Webhook activating premium for user {user_id} via order {order_id}")
                 _supabase_set_premium(user_id, order_id)
                 _mark_order_activated(order_id)
-        print(f"Webhook: {event.get('event')} — subscription {sub_id}")
+        print(f"Webhook: {event.get('event')} — order {order_id}")
     return {"ok": True}
 
 

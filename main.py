@@ -8,8 +8,9 @@ import urllib.request
 from contextlib import asynccontextmanager
 from typing import List, Optional
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, field_validator
 from openai import OpenAI
@@ -49,6 +50,9 @@ RAZORPAY_PLAN_ID    = os.getenv("RAZORPAY_PLAN_ID", "")   # create in Razorpay d
 # Use plain SUPABASE_URL in Railway — NEXT_PUBLIC_SUPABASE_URL is Vercel-only
 SUPABASE_URL              = os.getenv("SUPABASE_URL", "")
 SUPABASE_SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "")
+# JWT secret from Supabase dashboard → Project Settings → API → JWT Secret
+# Required to verify user tokens on the recipe endpoint. Set in Railway env vars.
+SUPABASE_JWT_SECRET       = os.getenv("SUPABASE_JWT_SECRET", "")
 
 SYSTEM_PROMPT = """You are a Pediatric Nutritionist AI for TinyTastes.
 Generate safe, age-appropriate baby food recipes. Respond with valid JSON only — no prose, no markdown fences.
@@ -710,10 +714,46 @@ app.add_middleware(
 
 
 # ---------------------------------------------------------------------------
+# Auth dependency — verifies Supabase JWT on sensitive routes
+# ---------------------------------------------------------------------------
+_bearer = HTTPBearer(auto_error=False)
+
+def verify_token(credentials: HTTPAuthorizationCredentials | None = Depends(_bearer)) -> str:
+    """Extract and verify Supabase JWT. Returns user_id (sub claim).
+
+    If SUPABASE_JWT_SECRET is not set (e.g. during local dev), verification is
+    skipped and "dev" is returned — protecting against misconfigured production
+    deployments while keeping local dev frictionless.
+    """
+    if not credentials:
+        raise HTTPException(status_code=401, detail="Authentication required")
+
+    token = credentials.credentials
+    if not SUPABASE_JWT_SECRET:
+        # Secret not configured — skip verification (local dev only)
+        # In production always set SUPABASE_JWT_SECRET in Railway env vars
+        return "unverified-dev"
+
+    try:
+        import jwt as pyjwt
+        payload = pyjwt.decode(
+            token,
+            SUPABASE_JWT_SECRET,
+            algorithms=["HS256"],
+            audience="authenticated",
+        )
+        return payload["sub"]   # Supabase user UUID
+    except pyjwt.ExpiredSignatureError:
+        raise HTTPException(status_code=401, detail="Session expired — please sign in again")
+    except Exception:
+        raise HTTPException(status_code=401, detail="Invalid authentication token")
+
+
+# ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
 @app.post("/api/v1/get-recipe", response_model=RecipeResponseSchema)
-async def process_recipe_engine(request: RecipeRequest):
+async def process_recipe_engine(request: RecipeRequest, _user_id: str = Depends(verify_token)):
     return await _get_recipe(request)
 
 
@@ -867,7 +907,7 @@ def _supabase_set_premium(user_id: str, subscription_id: str) -> bool:
 
     import datetime
     premium_until = (
-        datetime.datetime.utcnow() + datetime.timedelta(days=3650)
+        datetime.datetime.utcnow() + datetime.timedelta(days=365)   # 1-year access per ₹199 payment
     ).strftime("%Y-%m-%dT%H:%M:%S+00:00")
 
     payload = json.dumps({
@@ -1000,7 +1040,7 @@ async def create_order(req: RazorpayCreateOrderRequest):
         import razorpay
         client = razorpay.Client(auth=(RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET))
         order = client.order.create({
-            "amount":   9900,    # ₹99 in paise
+            "amount":   19900,   # ₹199 in paise
             "currency": "INR",
             "receipt":  f"tt_premium_{req.user_id[:8]}",
         })

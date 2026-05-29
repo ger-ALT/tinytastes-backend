@@ -50,9 +50,8 @@ RAZORPAY_PLAN_ID    = os.getenv("RAZORPAY_PLAN_ID", "")   # create in Razorpay d
 # Use plain SUPABASE_URL in Railway — NEXT_PUBLIC_SUPABASE_URL is Vercel-only
 SUPABASE_URL              = os.getenv("SUPABASE_URL", "")
 SUPABASE_SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "")
-# JWT secret from Supabase dashboard → Project Settings → API → JWT Secret
-# Required to verify user tokens on the recipe endpoint. Set in Railway env vars.
-SUPABASE_JWT_SECRET       = os.getenv("SUPABASE_JWT_SECRET", "")
+# Supabase uses ES256 (asymmetric) JWTs — verified via the JWKS endpoint.
+# No secret needed; keys are fetched from /.well-known/jwks.json at startup.
 
 SYSTEM_PROMPT = """You are a Pediatric Nutritionist AI for TinyTastes.
 Generate safe, age-appropriate baby food recipes. Respond with valid JSON only — no prose, no markdown fences.
@@ -718,28 +717,45 @@ app.add_middleware(
 # ---------------------------------------------------------------------------
 _bearer = HTTPBearer(auto_error=False)
 
-def verify_token(credentials: HTTPAuthorizationCredentials | None = Depends(_bearer)) -> str:
-    """Extract and verify Supabase JWT. Returns user_id (sub claim).
+# Lazy JWKS client — fetched once, keys cached and auto-rotated by PyJWT.
+# Supabase uses ES256 (asymmetric EC keys) published at /.well-known/jwks.json.
+_jwks_client = None
 
-    If SUPABASE_JWT_SECRET is not set (e.g. during local dev), verification is
-    skipped and "dev" is returned — protecting against misconfigured production
-    deployments while keeping local dev frictionless.
+def _get_jwks_client():
+    global _jwks_client
+    if _jwks_client is None and SUPABASE_URL:
+        import jwt as pyjwt
+        _jwks_client = pyjwt.PyJWKClient(
+            f"{SUPABASE_URL.rstrip('/')}/auth/v1/.well-known/jwks.json",
+            cache_jwk_set=True,
+            lifespan=3600,   # refresh keys every hour
+        )
+    return _jwks_client
+
+
+def verify_token(credentials: HTTPAuthorizationCredentials | None = Depends(_bearer)) -> str:
+    """Verify Supabase ES256 JWT via JWKS. Returns user_id (sub claim).
+
+    Falls back to 'unverified-dev' when SUPABASE_URL is not set (local dev).
+    In production SUPABASE_URL must be set in Railway env vars.
     """
     if not credentials:
         raise HTTPException(status_code=401, detail="Authentication required")
 
     token = credentials.credentials
-    if not SUPABASE_JWT_SECRET:
-        # Secret not configured — skip verification (local dev only)
-        # In production always set SUPABASE_JWT_SECRET in Railway env vars
+    client = _get_jwks_client()
+
+    if client is None:
+        # SUPABASE_URL not configured — local dev only, skip verification
         return "unverified-dev"
 
     try:
         import jwt as pyjwt
+        signing_key = client.get_signing_key_from_jwt(token)
         payload = pyjwt.decode(
             token,
-            SUPABASE_JWT_SECRET,
-            algorithms=["HS256"],
+            signing_key.key,
+            algorithms=["ES256", "HS256"],   # support both signing algorithms
             audience="authenticated",
         )
         return payload["sub"]   # Supabase user UUID

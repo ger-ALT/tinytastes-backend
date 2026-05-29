@@ -859,12 +859,13 @@ def _supabase_set_premium(user_id: str, subscription_id: str) -> bool:
     if not SUPABASE_URL or not SUPABASE_SERVICE_ROLE_KEY:
         print("Supabase premium update skipped: SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY not set")
         return False
-    from datetime import datetime, timezone
+    # Only send columns that are guaranteed to exist in the table.
+    # Extra fields (premium_since, razorpay_subscription_id) caused 400 if the
+    # column hadn't been added yet. Use two separate Prefer values to avoid
+    # PostgREST rejecting a comma-joined header.
     payload = json.dumps({
-        "id":                       user_id,
-        "is_premium":               True,
-        "razorpay_subscription_id": subscription_id,
-        "premium_since":            datetime.now(timezone.utc).isoformat(),
+        "id":         user_id,
+        "is_premium": True,
     }).encode()
     req = urllib.request.Request(
         f"{SUPABASE_URL}/rest/v1/user_profiles",
@@ -873,7 +874,7 @@ def _supabase_set_premium(user_id: str, subscription_id: str) -> bool:
             "Content-Type":  "application/json",
             "Authorization": f"Bearer {SUPABASE_SERVICE_ROLE_KEY}",
             "apikey":        SUPABASE_SERVICE_ROLE_KEY,
-            "Prefer":        "resolution=merge-duplicates,return=minimal",
+            "Prefer":        "resolution=merge-duplicates",
         },
         method="POST",
     )

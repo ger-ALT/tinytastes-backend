@@ -2,6 +2,7 @@ import sqlite3
 import json
 import os
 import tempfile
+import urllib.error
 import urllib.parse
 import urllib.request
 from contextlib import asynccontextmanager
@@ -851,37 +852,36 @@ async def send_push_notification(req: SendPushRequest):
 # Razorpay subscription routes
 # ---------------------------------------------------------------------------
 def _supabase_set_premium(user_id: str, subscription_id: str) -> bool:
-    """Upsert is_premium=true in Supabase using the service role key.
+    """PATCH is_premium=true on the existing user_profiles row.
 
-    Uses POST + Prefer:resolution=merge-duplicates (upsert) rather than PATCH
-    so the row is created if it doesn't exist yet, not silently skipped.
+    getUserProfile() always creates the row before payment happens, so PATCH
+    is safe and avoids upsert complexity (upsert INSERT needs every NOT NULL
+    column which varies per project).
     """
     if not SUPABASE_URL or not SUPABASE_SERVICE_ROLE_KEY:
         print("Supabase premium update skipped: SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY not set")
         return False
-    # Only send columns that are guaranteed to exist in the table.
-    # Extra fields (premium_since, razorpay_subscription_id) caused 400 if the
-    # column hadn't been added yet. Use two separate Prefer values to avoid
-    # PostgREST rejecting a comma-joined header.
-    payload = json.dumps({
-        "id":         user_id,
-        "is_premium": True,
-    }).encode()
+    payload = json.dumps({"is_premium": True}).encode()
+    url = f"{SUPABASE_URL}/rest/v1/user_profiles?id=eq.{urllib.parse.quote(user_id)}"
     req = urllib.request.Request(
-        f"{SUPABASE_URL}/rest/v1/user_profiles",
+        url,
         data=payload,
         headers={
             "Content-Type":  "application/json",
             "Authorization": f"Bearer {SUPABASE_SERVICE_ROLE_KEY}",
             "apikey":        SUPABASE_SERVICE_ROLE_KEY,
-            "Prefer":        "resolution=merge-duplicates",
+            "Prefer":        "return=minimal",
         },
-        method="POST",
+        method="PATCH",
     )
     try:
         urllib.request.urlopen(req, timeout=10)
         print(f"Supabase premium activated for user {user_id}")
         return True
+    except urllib.error.HTTPError as e:
+        body = e.read().decode("utf-8", errors="replace")
+        print(f"Supabase premium update failed: {e.code} {e.reason} — {body}")
+        return False
     except Exception as e:
         print(f"Supabase premium update failed: {e}")
         return False

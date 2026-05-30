@@ -5,7 +5,6 @@ import tempfile
 import urllib.error
 import urllib.parse
 import urllib.request
-import uuid as _uuid
 from contextlib import asynccontextmanager
 from typing import List, Optional
 
@@ -849,29 +848,7 @@ async def export_pdf(request: RecipeRequest):
 
     doc.build(story)
     safe_name = recipe.recipe_name.lower().replace(" ", "_")[:40]
-    filename = f"tinytastes_{safe_name}.pdf"
-
-    # Store under a one-time token so the browser can fetch it via a plain GET
-    # URL (blob URLs can't cross window boundaries on iOS/Android).
-    token = str(_uuid.uuid4())
-    _pdf_store[token] = (tmp.name, filename)
-    return {"token": token}
-
-
-# In-memory PDF store — token → (file_path, filename). One-time use.
-_pdf_store: dict = {}
-
-
-@app.get("/api/v1/pdf/{token}")
-async def serve_pdf(token: str):
-    """Serve a previously generated PDF by one-time token."""
-    entry = _pdf_store.pop(token, None)
-    if entry is None:
-        raise HTTPException(status_code=404, detail="PDF not found or already downloaded")
-    path, filename = entry
-    if not os.path.exists(path):
-        raise HTTPException(status_code=404, detail="PDF file missing")
-    return FileResponse(path, media_type="application/pdf", filename=filename)
+    return FileResponse(tmp.name, media_type="application/pdf", filename=f"tinytastes_{safe_name}.pdf")
 
 
 # ---------------------------------------------------------------------------

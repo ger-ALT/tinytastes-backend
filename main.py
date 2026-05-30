@@ -645,9 +645,7 @@ async def _get_recipe(request: RecipeRequest) -> RecipeResponseSchema:
         full_ingredients: List[str] = cached.pop("_full_ingredients")
         return RecipeResponseSchema(
             **cached,
-            affiliate_links=generate_affiliate_links(
-                request.available_ingredients, full_ingredients, request.user_region
-            ),
+            affiliate_links=[],
             allergen_warning=check_allergen_overlap(request.known_allergens, cached["allergen_flags"]),
         )
 
@@ -706,9 +704,7 @@ async def _get_recipe(request: RecipeRequest) -> RecipeResponseSchema:
             preparation_steps=ai.preparation_steps,
             texture_modification_notes=ai.texture_modification_notes,
             regional_substitute_suggestions=ai.regional_substitute_suggestions,
-            affiliate_links=generate_affiliate_links(
-                request.available_ingredients, ai.ingredients_required, request.user_region
-            ),
+            affiliate_links=[],
             serving_size=ai.serving_size,
             storage_instructions=ai.storage_instructions,
             allergen_warning=check_allergen_overlap(request.known_allergens, ai.allergen_flags),
@@ -869,12 +865,6 @@ async def export_pdf(request: RecipeRequest):
                 bulletType="bullet",
             )
         )
-
-    if recipe.affiliate_links:
-        story.append(Spacer(1, 0.1 * inch))
-        story.append(Paragraph("Get Missing Ingredients", section_style))
-        for link in recipe.affiliate_links:
-            story.append(Paragraph(f'<link href="{link.action_url}" color="#FF6B35">{link.item}</link>', body))
 
     doc.build(story)
     safe_name = recipe.recipe_name.lower().replace(" ", "_")[:40]

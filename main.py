@@ -80,8 +80,24 @@ OUTPUT FORMAT (JSON, no other text):
   "regional_substitute_suggestions": ["string"],
   "ingredients_required": ["string"],
   "serving_size": "string (e.g. '2-3 tablespoons per meal')",
-  "storage_instructions": "string (e.g. 'Refrigerate up to 2 days, freeze up to 1 month')"
-}"""
+  "storage_instructions": "string (e.g. 'Refrigerate up to 2 days, freeze up to 1 month')",
+  "nutrition_per_2tbsp": {
+    "energy_kcal": number,
+    "protein_g": number,
+    "iron_mg": number,
+    "calcium_mg": number,
+    "vitamin_c_mg": number,
+    "vitamin_a_mcg": number,
+    "fiber_g": number,
+    "zinc_mg": number
+  }
+}
+
+NUTRITION RULES:
+- Always populate nutrition_per_2tbsp with realistic estimated values for 2 tablespoons (~30g) of the finished recipe.
+- Base values on the primary ingredients used. Use standard nutritional data for Indian foods.
+- Values must be numbers (not strings). Use 0 if a nutrient is negligible.
+- Iron and calcium are especially important for babies — always include accurate estimates."""
 
 
 # ---------------------------------------------------------------------------
@@ -165,6 +181,17 @@ class AffiliateLink(BaseModel):
     action_url: str
 
 
+class NutritionPer2Tbsp(BaseModel):
+    energy_kcal: float = 0
+    protein_g:   float = 0
+    iron_mg:     float = 0
+    calcium_mg:  float = 0
+    vitamin_c_mg: float = 0
+    vitamin_a_mcg: float = 0
+    fiber_g:     float = 0
+    zinc_mg:     float = 0
+
+
 class RecipeResponseSchema(BaseModel):
     recipe_name: str
     suitability_score: int
@@ -176,6 +203,7 @@ class RecipeResponseSchema(BaseModel):
     serving_size: str = ""
     storage_instructions: str = ""
     allergen_warning: List[str] = []
+    nutrition_per_2tbsp: Optional[NutritionPer2Tbsp] = None
 
 
 class AIRecipeOutput(BaseModel):
@@ -194,6 +222,7 @@ class AIRecipeOutput(BaseModel):
     ingredients_required: List[str]
     serving_size: str = ""
     storage_instructions: str = ""
+    nutrition_per_2tbsp: Optional[NutritionPer2Tbsp] = None
 
 
 # ---------------------------------------------------------------------------
@@ -683,6 +712,7 @@ async def _get_recipe(request: RecipeRequest) -> RecipeResponseSchema:
             serving_size=ai.serving_size,
             storage_instructions=ai.storage_instructions,
             allergen_warning=check_allergen_overlap(request.known_allergens, ai.allergen_flags),
+            nutrition_per_2tbsp=ai.nutrition_per_2tbsp,
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"AI Engine Failure: {e}")

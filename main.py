@@ -65,6 +65,7 @@ MEDICAL RULES:
 
 SIMPLICITY RULES:
 - Baby food must always be simple. Never create complex or multi-layered recipes.
+- If 1-3 ingredients are provided, you MUST use ALL of them in the recipe — do not drop any.
 - If more than 4 ingredients are provided, pick the 3-4 most nutritionally complementary ones and ignore the rest.
 - Preparation steps must be 4-6 steps maximum — simple enough for a parent to follow quickly.
 - Flavour should be mild. No strong spices, no heavy seasoning.

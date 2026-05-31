@@ -271,6 +271,10 @@ def init_db() -> None:
                 cursor.execute(f"ALTER TABLE recipes ADD COLUMN {col} TEXT NOT NULL DEFAULT {default}")
             except Exception:
                 pass  # column already exists — skip
+        try:
+            cursor.execute("ALTER TABLE recipes ADD COLUMN nutrition_json TEXT DEFAULT NULL")
+        except Exception:
+            pass  # column already exists — skip
         conn.commit()
         _seed_recipes(cursor, conn)
 
@@ -284,9 +288,61 @@ _SERVE_CHUNKY  = "3-4 tablespoons per meal"
 _SERVE_FINGER  = "3-4 pieces per meal, let baby self-feed"
 
 
+# Nutrition estimates per 2 tbsp (~30g) for all seeded recipes
+_NUTRITION_SEED: dict = {
+    "Apple Sweet Potato Puree":      {"energy_kcal":35,"protein_g":0.4,"iron_mg":0.2,"calcium_mg":10,"vitamin_c_mg":5, "vitamin_a_mcg":110,"fiber_g":1.2,"zinc_mg":0.1},
+    "Banana Avocado Mash":           {"energy_kcal":45,"protein_g":0.6,"iron_mg":0.1,"calcium_mg":4, "vitamin_c_mg":3, "vitamin_a_mcg":5,  "fiber_g":1.5,"zinc_mg":0.1},
+    "Carrot Pea Puree":              {"energy_kcal":20,"protein_g":1.0,"iron_mg":0.5,"calcium_mg":12,"vitamin_c_mg":8, "vitamin_a_mcg":280,"fiber_g":1.8,"zinc_mg":0.2},
+    "Broccoli Potato Puree":         {"energy_kcal":22,"protein_g":0.8,"iron_mg":0.3,"calcium_mg":10,"vitamin_c_mg":12,"vitamin_a_mcg":15, "fiber_g":1.0,"zinc_mg":0.1},
+    "Mango Banana Puree":            {"energy_kcal":42,"protein_g":0.4,"iron_mg":0.1,"calcium_mg":6, "vitamin_c_mg":18,"vitamin_a_mcg":40, "fiber_g":0.8,"zinc_mg":0.1},
+    "Pear Spinach Puree":            {"energy_kcal":18,"protein_g":0.5,"iron_mg":0.5,"calcium_mg":15,"vitamin_c_mg":6, "vitamin_a_mcg":90, "fiber_g":1.2,"zinc_mg":0.1},
+    "Carrot Sweet Potato Puree":     {"energy_kcal":28,"protein_g":0.6,"iron_mg":0.3,"calcium_mg":15,"vitamin_c_mg":6, "vitamin_a_mcg":320,"fiber_g":1.5,"zinc_mg":0.1},
+    "Potato Carrot Mash":            {"energy_kcal":30,"protein_g":0.7,"iron_mg":0.3,"calcium_mg":10,"vitamin_c_mg":8, "vitamin_a_mcg":180,"fiber_g":1.0,"zinc_mg":0.2},
+    "Moong Dal Rice Puree":          {"energy_kcal":40,"protein_g":2.2,"iron_mg":0.8,"calcium_mg":10,"vitamin_c_mg":0, "vitamin_a_mcg":0,  "fiber_g":1.0,"zinc_mg":0.3},
+    "Ragi Banana Porridge":          {"energy_kcal":48,"protein_g":1.2,"iron_mg":1.0,"calcium_mg":42,"vitamin_c_mg":2, "vitamin_a_mcg":3,  "fiber_g":1.5,"zinc_mg":0.2},
+    "Apple Carrot Puree":            {"energy_kcal":22,"protein_g":0.3,"iron_mg":0.2,"calcium_mg":8, "vitamin_c_mg":5, "vitamin_a_mcg":150,"fiber_g":1.0,"zinc_mg":0.1},
+    "Papaya Puree":                  {"energy_kcal":18,"protein_g":0.2,"iron_mg":0.1,"calcium_mg":8, "vitamin_c_mg":22,"vitamin_a_mcg":55, "fiber_g":0.8,"zinc_mg":0.1},
+    "Sweet Potato Puree":            {"energy_kcal":30,"protein_g":0.5,"iron_mg":0.2,"calcium_mg":8, "vitamin_c_mg":5, "vitamin_a_mcg":210,"fiber_g":1.2,"zinc_mg":0.1},
+    "Pumpkin Carrot Puree":          {"energy_kcal":22,"protein_g":0.5,"iron_mg":0.3,"calcium_mg":12,"vitamin_c_mg":6, "vitamin_a_mcg":280,"fiber_g":1.2,"zinc_mg":0.1},
+    "Chicken Vegetable Stew":        {"energy_kcal":35,"protein_g":3.5,"iron_mg":0.4,"calcium_mg":8, "vitamin_c_mg":3, "vitamin_a_mcg":120,"fiber_g":0.8,"zinc_mg":0.5},
+    "Red Lentil Vegetable Dal":      {"energy_kcal":38,"protein_g":2.5,"iron_mg":1.2,"calcium_mg":12,"vitamin_c_mg":4, "vitamin_a_mcg":80, "fiber_g":1.5,"zinc_mg":0.4},
+    "Avocado Egg Scramble":          {"energy_kcal":55,"protein_g":3.5,"iron_mg":0.5,"calcium_mg":18,"vitamin_c_mg":2, "vitamin_a_mcg":30, "fiber_g":0.8,"zinc_mg":0.5},
+    "Banana Oat Porridge":           {"energy_kcal":52,"protein_g":1.5,"iron_mg":0.6,"calcium_mg":8, "vitamin_c_mg":2, "vitamin_a_mcg":3,  "fiber_g":1.5,"zinc_mg":0.3},
+    "Sweet Potato Black Bean Mash":  {"energy_kcal":42,"protein_g":2.0,"iron_mg":0.8,"calcium_mg":15,"vitamin_c_mg":4, "vitamin_a_mcg":120,"fiber_g":2.0,"zinc_mg":0.4},
+    "Classic Khichdi":               {"energy_kcal":45,"protein_g":2.5,"iron_mg":1.0,"calcium_mg":10,"vitamin_c_mg":0, "vitamin_a_mcg":0,  "fiber_g":1.2,"zinc_mg":0.4},
+    "Dalia Vegetable Khichdi":       {"energy_kcal":40,"protein_g":1.5,"iron_mg":0.7,"calcium_mg":12,"vitamin_c_mg":2, "vitamin_a_mcg":60, "fiber_g":1.5,"zinc_mg":0.3},
+    "Soft Vegetable Upma":           {"energy_kcal":38,"protein_g":1.2,"iron_mg":0.5,"calcium_mg":8, "vitamin_c_mg":3, "vitamin_a_mcg":50, "fiber_g":1.0,"zinc_mg":0.2},
+    "Banana Curd Bowl":              {"energy_kcal":48,"protein_g":1.8,"iron_mg":0.1,"calcium_mg":50,"vitamin_c_mg":3, "vitamin_a_mcg":8,  "fiber_g":0.8,"zinc_mg":0.3},
+    "Palak Aloo Mash":               {"energy_kcal":32,"protein_g":1.2,"iron_mg":1.0,"calcium_mg":25,"vitamin_c_mg":10,"vitamin_a_mcg":150,"fiber_g":1.2,"zinc_mg":0.2},
+    "Apple Oat Porridge":            {"energy_kcal":50,"protein_g":1.5,"iron_mg":0.6,"calcium_mg":8, "vitamin_c_mg":4, "vitamin_a_mcg":2,  "fiber_g":1.5,"zinc_mg":0.3},
+    "Banana Fingers":                {"energy_kcal":35,"protein_g":0.4,"iron_mg":0.1,"calcium_mg":4, "vitamin_c_mg":2, "vitamin_a_mcg":2,  "fiber_g":0.8,"zinc_mg":0.1},
+    "Blueberry Ricotta Bites":       {"energy_kcal":45,"protein_g":2.0,"iron_mg":0.2,"calcium_mg":40,"vitamin_c_mg":3, "vitamin_a_mcg":8,  "fiber_g":0.5,"zinc_mg":0.2},
+    "Spinach Egg Mini Frittata":     {"energy_kcal":42,"protein_g":4.0,"iron_mg":0.8,"calcium_mg":25,"vitamin_c_mg":5, "vitamin_a_mcg":120,"fiber_g":0.5,"zinc_mg":0.5},
+    "Sweet Potato Chickpea Patties": {"energy_kcal":48,"protein_g":2.5,"iron_mg":0.8,"calcium_mg":18,"vitamin_c_mg":4, "vitamin_a_mcg":90, "fiber_g":2.0,"zinc_mg":0.4},
+    "Soft Cinnamon Apple Wedges":    {"energy_kcal":20,"protein_g":0.2,"iron_mg":0.1,"calcium_mg":5, "vitamin_c_mg":3, "vitamin_a_mcg":2,  "fiber_g":1.2,"zinc_mg":0.0},
+    "Cheesy Zucchini Sticks":        {"energy_kcal":35,"protein_g":2.0,"iron_mg":0.2,"calcium_mg":45,"vitamin_c_mg":5, "vitamin_a_mcg":12, "fiber_g":0.5,"zinc_mg":0.3},
+    "Baby Oat Pancakes":             {"energy_kcal":58,"protein_g":2.8,"iron_mg":0.7,"calcium_mg":15,"vitamin_c_mg":2, "vitamin_a_mcg":8,  "fiber_g":1.2,"zinc_mg":0.4},
+    "Soft Paneer Cubes":             {"energy_kcal":60,"protein_g":4.0,"iron_mg":0.2,"calcium_mg":80,"vitamin_c_mg":0, "vitamin_a_mcg":15, "fiber_g":0.0,"zinc_mg":0.4},
+    "Baked Sweet Potato Fingers":    {"energy_kcal":35,"protein_g":0.5,"iron_mg":0.2,"calcium_mg":8, "vitamin_c_mg":5, "vitamin_a_mcg":200,"fiber_g":1.2,"zinc_mg":0.1},
+    "Ragi Banana Mini Pancakes":     {"energy_kcal":52,"protein_g":1.5,"iron_mg":1.2,"calcium_mg":48,"vitamin_c_mg":2, "vitamin_a_mcg":3,  "fiber_g":1.5,"zinc_mg":0.3},
+    "Banana Egg Bites":              {"energy_kcal":50,"protein_g":3.5,"iron_mg":0.4,"calcium_mg":18,"vitamin_c_mg":2, "vitamin_a_mcg":12, "fiber_g":0.5,"zinc_mg":0.5},
+}
+
+
+def _backfill_nutrition(cursor: sqlite3.Cursor, conn: sqlite3.Connection) -> None:
+    """One-time backfill of nutrition_json for existing seeded recipes on Railway."""
+    for name, nutr in _NUTRITION_SEED.items():
+        cursor.execute(
+            "UPDATE recipes SET nutrition_json = ? WHERE recipe_name = ? AND nutrition_json IS NULL",
+            (json.dumps(nutr), name),
+        )
+    conn.commit()
+
+
 def _seed_recipes(cursor: sqlite3.Cursor, conn: sqlite3.Connection) -> None:
     cursor.execute("SELECT COUNT(*) FROM recipes")
     if cursor.fetchone()[0] > 0:
+        _backfill_nutrition(cursor, conn)  # ensure existing DB rows get nutrition
         return
 
     # Tuple: (ingredient_key, texture, name, steps_json, ingredients_json, allergens_json, serving_size, storage_instructions)
@@ -598,7 +654,7 @@ def check_local_database(ingredients: List[str], texture: str) -> Optional[dict]
         cursor = conn.cursor()
         # Exact match first
         cursor.execute(
-            "SELECT recipe_name, preparation_steps, full_ingredients, allergen_flags, serving_size, storage_instructions "
+            "SELECT recipe_name, preparation_steps, full_ingredients, allergen_flags, serving_size, storage_instructions, nutrition_json "
             "FROM recipes WHERE ingredient_key = ? AND target_texture = ?",
             (sorted_key, texture.lower()),
         )
@@ -608,7 +664,7 @@ def check_local_database(ingredients: List[str], texture: str) -> Optional[dict]
 
         # Subset match: find best cached recipe whose ingredients the user has
         cursor.execute(
-            "SELECT recipe_name, preparation_steps, full_ingredients, allergen_flags, ingredient_key, serving_size, storage_instructions "
+            "SELECT recipe_name, preparation_steps, full_ingredients, allergen_flags, ingredient_key, serving_size, storage_instructions, nutrition_json "
             "FROM recipes WHERE target_texture = ?",
             (texture.lower(),),
         )
@@ -618,12 +674,18 @@ def check_local_database(ingredients: List[str], texture: str) -> Optional[dict]
             if cached_set.issubset(user_set) and len(cached_set) > best_overlap:
                 best_row, best_overlap = r, len(cached_set)
         if best_row:
-            # Re-order: name, steps, ingredients, allergens, serving_size, storage_instructions
-            return _build_cache_result((best_row[0], best_row[1], best_row[2], best_row[3], best_row[5], best_row[6]))
+            # Re-order: name, steps, ingredients, allergens, serving_size, storage_instructions, nutrition_json
+            return _build_cache_result((best_row[0], best_row[1], best_row[2], best_row[3], best_row[5], best_row[6], best_row[7]))
 
     return None
 
 def _build_cache_result(row) -> dict:
+    nutrition = None
+    if len(row) > 6 and row[6]:
+        try:
+            nutrition = json.loads(row[6])
+        except Exception:
+            pass
     return {
         "recipe_name": row[0],
         "suitability_score": 10,
@@ -634,6 +696,7 @@ def _build_cache_result(row) -> dict:
         "serving_size": row[4] if len(row) > 4 else "",
         "storage_instructions": row[5] if len(row) > 5 else "",
         "_full_ingredients": json.loads(row[2]),
+        "nutrition_per_2tbsp": nutrition,
     }
 
 
@@ -644,10 +707,12 @@ async def _get_recipe(request: RecipeRequest) -> RecipeResponseSchema:
     cached = check_local_database(request.available_ingredients, request.texture_milestone)
     if cached and not request.custom_constraints:
         full_ingredients: List[str] = cached.pop("_full_ingredients")
+        nutr_dict = cached.pop("nutrition_per_2tbsp", None)
         return RecipeResponseSchema(
             **cached,
             affiliate_links=[],
             allergen_warning=check_allergen_overlap(request.known_allergens, cached["allergen_flags"]),
+            nutrition_per_2tbsp=NutritionPer2Tbsp(**nutr_dict) if nutr_dict else None,
         )
 
     # Layer 2: AI fallback (DeepSeek or Ollama)
@@ -690,10 +755,11 @@ async def _get_recipe(request: RecipeRequest) -> RecipeResponseSchema:
                 ).fetchone()
                 if not existing:
                     conn.execute(
-                        "INSERT INTO recipes (ingredient_key, target_texture, recipe_name, preparation_steps, full_ingredients, allergen_flags, serving_size, storage_instructions) VALUES (?,?,?,?,?,?,?,?)",
+                        "INSERT INTO recipes (ingredient_key, target_texture, recipe_name, preparation_steps, full_ingredients, allergen_flags, serving_size, storage_instructions, nutrition_json) VALUES (?,?,?,?,?,?,?,?,?)",
                         (sorted_key, request.texture_milestone, ai.recipe_name,
                          json.dumps(ai.preparation_steps), json.dumps(ai.ingredients_required),
-                         json.dumps(ai.allergen_flags), ai.serving_size, ai.storage_instructions)
+                         json.dumps(ai.allergen_flags), ai.serving_size, ai.storage_instructions,
+                         ai.nutrition_per_2tbsp.model_dump_json() if ai.nutrition_per_2tbsp else None)
                     )
         except Exception:
             pass  # auto-cache is non-critical

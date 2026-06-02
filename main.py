@@ -63,6 +63,12 @@ MEDICAL RULES:
 - ingredients_required must list every ingredient the recipe needs, not just what the user provided.
 - Always include serving_size appropriate for the baby's age_months. Newborns (4-6m): 1-2 tbsp. Mid (7-9m): 3-4 tbsp. Older (10-12m): 4-6 tbsp. Toddlers (12m+): small bowl.
 
+DIETARY RULES (follow strictly based on dietary_preference in input):
+- "veg": Use ONLY vegetarian ingredients. No meat, no fish, no eggs under any circumstances.
+- "eggetarian": Eggs are allowed. No meat, no fish.
+- "nonveg": All ingredients allowed including meat, fish, and eggs.
+- If dietary_preference is missing, default to "veg".
+
 SIMPLICITY RULES:
 - Baby food must always be simple. Never create complex or multi-layered recipes.
 - If 1-3 ingredients are provided, you MUST use ALL of them in the recipe — do not drop any.
@@ -155,6 +161,7 @@ class RecipeRequest(BaseModel):
     texture_milestone: str
     custom_constraints: Optional[str] = None
     known_allergens: List[str] = []
+    dietary_preference: str = "veg"   # "veg" | "eggetarian" | "nonveg"
 
     @field_validator("available_ingredients")
     @classmethod
@@ -723,6 +730,7 @@ async def _get_recipe(request: RecipeRequest) -> RecipeResponseSchema:
             "texture_milestone": request.texture_milestone,
             "region": request.user_region,
             "special_notes": request.custom_constraints,
+            "dietary_preference": request.dietary_preference,
         }
         if AI_PROVIDER == "ollama":
             ai = _call_ollama(prompt_input)

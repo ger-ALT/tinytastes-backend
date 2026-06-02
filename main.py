@@ -1009,9 +1009,7 @@ def _supabase_set_premium(user_id: str, subscription_id: str) -> bool:
         return False
 
     import datetime
-    premium_until = (
-        datetime.datetime.utcnow() + datetime.timedelta(days=365)   # 1-year access per ₹199 payment
-    ).strftime("%Y-%m-%dT%H:%M:%S+00:00")
+    premium_until = "2099-12-31T00:00:00+00:00"   # lifetime access per ₹199 one-time payment
 
     payload = json.dumps({
         "id":            user_id,

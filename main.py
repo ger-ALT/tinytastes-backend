@@ -875,7 +875,7 @@ async def process_recipe_engine(request: RecipeRequest, _user_id: str = Depends(
 
 
 @app.post("/api/v1/export-pdf")
-async def export_pdf(request: RecipeRequest):
+async def export_pdf(request: RecipeRequest, _user_id: str = Depends(verify_token)):
     try:
         from reportlab.lib import colors
         from reportlab.lib.enums import TA_CENTER
@@ -1103,16 +1103,14 @@ async def verify_payment(req: RazorpayVerifyRequest):
 
 
 # ── Standard Checkout (order-based) ──────────────────────────────────────────
-
-class RazorpayCreateOrderRequest(BaseModel):
-    user_id: str
-
+# user_id is deliberately NOT a field here — it's derived server-side from the
+# verified Supabase JWT (Depends(verify_token)) on each route below. Trusting a
+# client-supplied user_id would let any caller activate premium for someone else.
 
 class RazorpayOrderVerifyRequest(BaseModel):
     razorpay_payment_id: str
     razorpay_order_id: str
     razorpay_signature: str
-    user_id: str
 
 
 def _store_order(order_id: str, user_id: str) -> None:
@@ -1141,8 +1139,8 @@ def _get_order_user(order_id: str) -> Optional[str]:
 
 
 @app.post("/api/v1/razorpay/create-order")
-async def create_order(req: RazorpayCreateOrderRequest):
-    """Create a Razorpay order for Standard Checkout (₹99 = 9900 paise)."""
+async def create_order(_user_id: str = Depends(verify_token)):
+    """Create a Razorpay order for Standard Checkout (₹199 = 19900 paise)."""
     if not RAZORPAY_KEY_ID or not RAZORPAY_KEY_SECRET:
         raise HTTPException(status_code=503, detail="Payments not configured")
     try:
@@ -1151,10 +1149,10 @@ async def create_order(req: RazorpayCreateOrderRequest):
         order = client.order.create({
             "amount":   19900,   # ₹199 in paise
             "currency": "INR",
-            "receipt":  f"tt_premium_{req.user_id[:8]}",
+            "receipt":  f"tt_premium_{_user_id[:8]}",
         })
         # Store mapping so the webhook can find user_id from order_id
-        _store_order(order["id"], req.user_id)
+        _store_order(order["id"], _user_id)
         return {
             "order_id": order["id"],
             "amount":   order["amount"],
@@ -1165,7 +1163,7 @@ async def create_order(req: RazorpayCreateOrderRequest):
 
 
 @app.post("/api/v1/razorpay/verify-payment")
-async def verify_order_payment(req: RazorpayOrderVerifyRequest):
+async def verify_order_payment(req: RazorpayOrderVerifyRequest, _user_id: str = Depends(verify_token)):
     """Verify Standard Checkout HMAC and activate premium in Supabase."""
     if not RAZORPAY_KEY_SECRET:
         raise HTTPException(status_code=503, detail="Payments not configured")
@@ -1182,7 +1180,7 @@ async def verify_order_payment(req: RazorpayOrderVerifyRequest):
         ).hexdigest()
         if expected != req.razorpay_signature:
             raise HTTPException(status_code=400, detail="Invalid payment signature")
-        _supabase_set_premium(req.user_id, req.razorpay_order_id)
+        _supabase_set_premium(_user_id, req.razorpay_order_id)
         _mark_order_activated(req.razorpay_order_id)
         return {"premium": True}
     except HTTPException:
